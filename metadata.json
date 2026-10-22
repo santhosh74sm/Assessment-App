@@ -1,0 +1,6 @@
+{
+  "name": "Puzzles Assessment App",
+  "description": "School Puzzle and Assessment Platform with Super Admin, School Admin, and Student portals, rule-based adaptive engine, and scoring.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,77 @@
+[
+  {
+    "group": "Aptitude",
+    "difficulty": "Easy",
+    "questionType": "Math",
+    "content": "What is the missing number in the sequence? 3, 6, 12, 24, ___?",
+    "timeSeconds": 30,
+    "points": 10,
+    "options": ["36", "48", "42", "50"],
+    "correctAnswer": "48",
+    "metadata": {
+      "explanation": "Each number is multiplied by 2: 24 * 2 = 48."
+    }
+  },
+  {
+    "group": "Reasoning",
+    "difficulty": "Easy",
+    "questionType": "Emoji",
+    "content": "Decode the hidden word puzzle from emojis: ☀️ + 👓 = ?",
+    "timeSeconds": 30,
+    "points": 10,
+    "options": ["Sunglasses", "Sunlight", "Hot Day", "Beach"],
+    "correctAnswer": "Sunglasses",
+    "metadata": {
+      "emojiSequence": ["☀️", "👓"],
+      "hint": "Something worn on sunny days."
+    }
+  },
+  {
+    "group": "Creativity",
+    "difficulty": "Medium",
+    "questionType": "Match",
+    "content": "Match each shape with its internal angle sum:",
+    "timeSeconds": 45,
+    "points": 15,
+    "pairs": [
+      {"left": "Triangle", "right": "180°"},
+      {"left": "Quadrilateral", "right": "360°"},
+      {"left": "Pentagon", "right": "540°"}
+    ],
+    "correctAnswer": {
+      "Triangle": "180°",
+      "Quadrilateral": "360°",
+      "Pentagon": "540°"
+    },
+    "metadata": {
+      "interactionType": "drag_and_drop_match"
+    }
+  },
+  {
+    "group": "Thinking",
+    "difficulty": "Medium",
+    "questionType": "Puzzle",
+    "content": "A father is 4 times older than his daughter. In 20 years, he will be twice as old as her. How old is the daughter today?",
+    "timeSeconds": 60,
+    "points": 20,
+    "options": ["8", "10", "12", "15"],
+    "correctAnswer": "10",
+    "metadata": {
+      "algebraicHint": "F = 4D, (F + 20) = 2(D + 20) => 4D + 20 = 2D + 40 => 2D = 20 => D = 10."
+    }
+  },
+  {
+    "group": "Reasoning",
+    "difficulty": "Hard",
+    "questionType": "Number",
+    "content": "Fill the 3x3 magic grid center: If rows, columns, and diagonals all sum to 15 using distinct digits 1 to 9, which number must occupy the central cell?",
+    "timeSeconds": 60,
+    "points": 25,
+    "options": ["3", "4", "5", "6"],
+    "correctAnswer": "5",
+    "metadata": {
+      "gridSize": "3x3",
+      "solutionKey": "Center cell of any 3x3 normal magic square must be the average 15 / 3 = 5."
+    }
+  }
+]
