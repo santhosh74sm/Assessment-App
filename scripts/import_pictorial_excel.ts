@@ -3,11 +3,13 @@ import path from 'path';
 import * as xlsx from 'xlsx';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import { QuestionModel, QuestionGroupModel } from '../database/models.js';
+import { QuestionModel, QuestionGroupModel } from '../database/models.ts';
+import { resolveMongoUri, buildTargetUri } from '../backend/database.ts';
 
 dotenv.config();
 
-const MONGO_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/puzzles_assessment';
+const rawUri = resolveMongoUri() || 'mongodb://127.0.0.1:27017/puzzles_assessment';
+const MONGO_URI = buildTargetUri(rawUri, 'puzzles_assessment_dev');
 
 interface ImportStats {
   totalRows: number;

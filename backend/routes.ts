@@ -242,8 +242,11 @@ function isRequestAssessmentExpired(req: Request, pubTest: any): boolean {
 // Check if system has any users
 router.get('/auth/setup-status', async (_req: Request, res: Response) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.json({ hasUsers: true, isConnected: false, totalUsers: 0 });
+    }
     const usersCount = await UserModel.countDocuments();
-    return res.json({ hasUsers: usersCount > 0, totalUsers: usersCount });
+    return res.json({ hasUsers: usersCount > 0, totalUsers: usersCount, isConnected: true });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to check setup status' });
   }

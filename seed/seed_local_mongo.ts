@@ -1,9 +1,10 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import { resolveMongoUri } from '../backend/database.ts';
 
 dotenv.config();
 
-const TARGET_URI = (process.env.MONGO_URI || process.env.MONGODB_URI || '').trim();
+const TARGET_URI = resolveMongoUri();
 
 /**
  * Seed utility for MongoDB Atlas.

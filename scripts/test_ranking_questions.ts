@@ -12,31 +12,17 @@ import {
 } from '../database/models.ts';
 import { hasAutomaticallyScorableAnswer } from '../backend/services/questionScoring.ts';
 import { serializeStudentQuestion } from '../backend/services/studentQuestionSerializer.ts';
+import { resolveMongoUri, buildTargetUri } from '../backend/database.ts';
 
 const EXPECTED_TEST_DB = 'puzzles_assessment_test';
 
 async function connectTestDatabase(): Promise<mongoose.Connection> {
-  const rawUri = (process.env.MONGO_URI || process.env.MONGODB_URI || '').trim();
+  const rawUri = resolveMongoUri();
   if (!rawUri) {
     throw new Error('Neither MONGO_URI nor MONGODB_URI is configured.');
   }
 
-  let testUri = rawUri;
-  if (testUri.includes('/?')) {
-    testUri = testUri.replace(/\/[^/?]*\?/, `/${EXPECTED_TEST_DB}?`);
-  } else if (testUri.endsWith('/')) {
-    testUri = testUri + EXPECTED_TEST_DB;
-  } else {
-    const parts = testUri.split('?');
-    const basePath = parts[0];
-    const lastSlashIdx = basePath.lastIndexOf('/');
-    const queryString = parts[1] ? `?${parts[1]}` : '';
-    if (lastSlashIdx > 0 && !basePath.slice(lastSlashIdx + 1).includes(':')) {
-      testUri = `${basePath.substring(0, lastSlashIdx)}/${EXPECTED_TEST_DB}${queryString}`;
-    } else {
-      testUri = `${basePath}/${EXPECTED_TEST_DB}${queryString}`;
-    }
-  }
+  const testUri = buildTargetUri(rawUri, EXPECTED_TEST_DB);
 
   await mongoose.connect(testUri, {
     dbName: EXPECTED_TEST_DB,

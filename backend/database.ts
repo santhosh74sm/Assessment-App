@@ -17,14 +17,63 @@ export function getTargetDatabaseName(): string {
   return (process.env.MONGO_DB_NAME || 'puzzles_assessment_dev').trim();
 }
 
+export function sanitizeMongoUri(raw?: string): string {
+  if (!raw) return '';
+  let uri = raw.trim();
+  while (
+    (uri.startsWith('"') && uri.endsWith('"')) ||
+    (uri.startsWith("'") && uri.endsWith("'"))
+  ) {
+    uri = uri.slice(1, -1).trim();
+  }
+  return uri;
+}
+
+export function resolveMongoUri(): string {
+  const candidates = [
+    sanitizeMongoUri(process.env.MONGO_URI),
+    sanitizeMongoUri(process.env.MONGODB_URI),
+  ].filter(Boolean);
+
+  const validCandidate = candidates.find(
+    (c) =>
+      (c.startsWith('mongodb://') || c.startsWith('mongodb+srv://')) &&
+      !c.includes('<db_password>') &&
+      !c.includes('<password>')
+  );
+
+  return validCandidate || candidates[0] || '';
+}
+
+export function buildTargetUri(baseUri: string, targetDb: string): string {
+  let finalUri = baseUri;
+  if (finalUri.includes('/?')) {
+    finalUri = finalUri.replace(/\/[^/?]*\?/, `/${targetDb}?`);
+  } else if (finalUri.endsWith('/')) {
+    finalUri = finalUri + targetDb;
+  } else {
+    const parts = finalUri.split('?');
+    const basePath = parts[0];
+    const lastSlashIdx = basePath.lastIndexOf('/');
+    const queryString = parts[1] ? `?${parts[1]}` : '';
+    if (lastSlashIdx > 0 && !basePath.slice(lastSlashIdx + 1).includes(':')) {
+      finalUri = `${basePath.substring(0, lastSlashIdx)}/${targetDb}${queryString}`;
+    } else {
+      finalUri = `${basePath}/${targetDb}${queryString}`;
+    }
+  }
+  return finalUri;
+}
+
 export async function connectMongoDB(): Promise<{ isConnected: boolean; dbName: string }> {
   try {
-    const rawUri = (process.env.MONGO_URI || process.env.MONGODB_URI || '').trim();
+    const rawUri = resolveMongoUri();
 
-    if (!rawUri) {
-      throw new Error(
-        'Neither MONGO_URI nor MONGODB_URI environment variable is configured.'
+    if (!rawUri || (!rawUri.startsWith('mongodb://') && !rawUri.startsWith('mongodb+srv://'))) {
+      console.warn(
+        '[Database] Notice: No valid MONGO_URI or MONGODB_URI configured. Operating in offline/preview mode.'
       );
+      return { isConnected: false, dbName: 'none' };
     }
 
     const targetDb = getTargetDatabaseName();
@@ -38,22 +87,7 @@ export async function connectMongoDB(): Promise<{ isConnected: boolean; dbName: 
     }
 
     // Build final URI ensuring target database is applied
-    let finalUri = rawUri;
-    if (finalUri.includes('/?')) {
-      finalUri = finalUri.replace(/\/[^/?]*\?/, `/${targetDb}?`);
-    } else if (finalUri.endsWith('/')) {
-      finalUri = finalUri + targetDb;
-    } else {
-      const parts = finalUri.split('?');
-      const basePath = parts[0];
-      const lastSlashIdx = basePath.lastIndexOf('/');
-      const queryString = parts[1] ? `?${parts[1]}` : '';
-      if (lastSlashIdx > 0 && !basePath.slice(lastSlashIdx + 1).includes(':')) {
-        finalUri = `${basePath.substring(0, lastSlashIdx)}/${targetDb}${queryString}`;
-      } else {
-        finalUri = `${basePath}/${targetDb}${queryString}`;
-      }
-    }
+    const finalUri = buildTargetUri(rawUri, targetDb);
 
     console.log(`[Database] Connecting to configured MongoDB deployment (target database: ${targetDb}).`);
 
@@ -90,8 +124,8 @@ export async function connectMongoDB(): Promise<{ isConnected: boolean; dbName: 
   } catch (err: any) {
     const errorName = typeof err?.name === 'string' ? err.name : 'UnknownError';
     const errorCode = typeof err?.code === 'string' || typeof err?.code === 'number' ? `, code: ${err.code}` : '';
-    console.error(`[Database] MongoDB Atlas connection failed (${errorName}${errorCode}):`, err.message || err);
-    throw err;
+    console.warn(`[Database] MongoDB connection notice (${errorName}${errorCode}):`, err.message || err);
+    return { isConnected: false, dbName: 'none' };
   }
 }
 

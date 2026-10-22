@@ -200,11 +200,19 @@ async function startServer() {
   process.on('SIGTERM', cleanShutdown);
   process.on('SIGINT', cleanShutdown);
 
+  process.on('unhandledRejection', (reason) => {
+    console.warn('[System] Unhandled promise rejection notice:', reason);
+  });
+
   // Establish and verify MongoDB Connection asynchronously so server startup is instantaneous
   console.log('[System] Initializing MongoDB database connection...');
   connectMongoDB()
     .then((dbInfo) => {
-      console.log(`[System] Verified MongoDB connection to database: ${dbInfo.dbName}`);
+      if (dbInfo.isConnected) {
+        console.log(`[System] Verified MongoDB connection to database: ${dbInfo.dbName}`);
+      } else {
+        console.warn('[System] MongoDB operating in offline/preview resilience mode.');
+      }
     })
     .catch((err: any) => {
       const errorName = typeof err?.name === 'string' ? err.name : 'UnknownError';
