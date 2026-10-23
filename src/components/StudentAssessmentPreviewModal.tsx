@@ -25,6 +25,7 @@ export interface AssessmentPreviewQuestion {
   isRankingQuestion?: boolean;
   questionType?: string;
   enableWrittenExplanation?: boolean;
+  defaultInput?: boolean;
   metadata?: any;
   pairs?: { left: string; right: string }[];
   images?: any[];
@@ -337,6 +338,7 @@ export function StudentAssessmentPreviewModal({
                 isRanking={Boolean(currentQ.isRanking || currentQ.isRankingQuestion || String(currentQ.questionType || '').toLowerCase() === 'ranking')}
                 isRankingQuestion={Boolean(currentQ.isRanking || currentQ.isRankingQuestion || String(currentQ.questionType || '').toLowerCase() === 'ranking')}
                 questionType={currentQ.questionType}
+                defaultInput={currentQ.defaultInput !== undefined ? Boolean(currentQ.defaultInput) : true}
                 pairs={currentQ.metadata?.pairs || currentQ.pairs || []}
                 images={Array.isArray(currentQ.images) && currentQ.images.length > 0 ? currentQ.images : (currentQ.metadata?.images || [])}
                 imageLayout={currentQ.imageLayout || currentQ.metadata?.imageLayout || 'auto'}

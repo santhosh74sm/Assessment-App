@@ -557,6 +557,7 @@ export function StudentPortal({ token, user, onLogout }: StudentPortalProps) {
               isRanking={Boolean(currentQ.isRanking || currentQ.isRankingQuestion || String(currentQ.questionType || '').toLowerCase() === 'ranking')}
               isRankingQuestion={Boolean(currentQ.isRanking || currentQ.isRankingQuestion || String(currentQ.questionType || '').toLowerCase() === 'ranking')}
               questionType={currentQ.questionType}
+              defaultInput={currentQ.defaultInput !== undefined ? Boolean(currentQ.defaultInput) : true}
               pairs={currentQ.metadata?.pairs || currentQ.pairs}
               images={currentQ.images || []}
               imageLayout={currentQ.imageLayout || 'auto'}

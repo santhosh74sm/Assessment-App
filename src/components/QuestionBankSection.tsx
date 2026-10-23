@@ -127,6 +127,14 @@ function ReadOnlyQuestionDetailCard({
               </span>
             </>
           )}
+          {q.defaultInput === false && (
+            <>
+              <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
+              <span className="text-amber-700 dark:text-amber-400 font-medium">
+                Default Input Hidden
+              </span>
+            </>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-3 text-xs font-mono tabular-nums">
@@ -329,6 +337,7 @@ export function QuestionBankSection({
     multipleSelection: boolean;
     isRanking: boolean;
     enableWrittenExplanation: boolean;
+    defaultInput: boolean;
     correctAnswer: string;
     images: any[];
     imageLayout: 'single_top' | 'comparison' | 'options_grid' | 'auto';
@@ -342,6 +351,7 @@ export function QuestionBankSection({
     multipleSelection: false,
     isRanking: false,
     enableWrittenExplanation: false,
+    defaultInput: true,
     correctAnswer: '',
     images: [],
     imageLayout: 'auto',
@@ -412,6 +422,7 @@ export function QuestionBankSection({
             multipleSelection: false,
             isRanking: false,
             enableWrittenExplanation: false,
+            defaultInput: true,
             correctAnswer: '',
             images: [],
             imageLayout: 'auto',
@@ -580,6 +591,7 @@ export function QuestionBankSection({
       multipleSelection: isMultiple,
       isRanking,
       enableWrittenExplanation: Boolean(q.enableWrittenExplanation),
+      defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : true,
       correctAnswer: corrAnsStr,
       images: Array.isArray(q.images) ? q.images : [],
       imageLayout: q.imageLayout || 'auto',
@@ -609,6 +621,7 @@ export function QuestionBankSection({
       multipleSelection: false,
       isRanking: false,
       enableWrittenExplanation: false,
+      defaultInput: true,
       correctAnswer: '',
       images: [],
       imageLayout: 'auto',
@@ -778,6 +791,7 @@ export function QuestionBankSection({
             isRankingQuestion: questionForm.isRanking,
             questionType: questionForm.isRanking ? 'Ranking' : (questionForm.multipleSelection ? 'Multiple Selection' : 'Single Selection'),
             enableWrittenExplanation: questionForm.enableWrittenExplanation,
+            defaultInput: questionForm.defaultInput,
             images: questionForm.images,
             imageLayout: questionForm.imageLayout || 'auto',
           }),
@@ -808,6 +822,7 @@ export function QuestionBankSection({
             isRankingQuestion: questionForm.isRanking,
             questionType: questionForm.isRanking ? 'Ranking' : (questionForm.multipleSelection ? 'Multiple Selection' : 'Single Selection'),
             enableWrittenExplanation: questionForm.enableWrittenExplanation,
+            defaultInput: questionForm.defaultInput,
             images: questionForm.images,
             imageLayout: questionForm.imageLayout || 'auto',
           }),
@@ -823,6 +838,7 @@ export function QuestionBankSection({
             multipleSelection: false,
             isRanking: false,
             enableWrittenExplanation: false,
+            defaultInput: true,
             correctAnswer: '',
             images: [],
             imageLayout: 'auto',
@@ -1173,6 +1189,17 @@ export function QuestionBankSection({
                   />
                   <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
                     Enable Written Explanation
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={questionForm.defaultInput}
+                    onChange={(e) => setQuestionForm({ ...questionForm, defaultInput: e.target.checked })}
+                    className="w-4 h-4 rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                  />
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                    Default Input
                   </span>
                 </label>
               </div>

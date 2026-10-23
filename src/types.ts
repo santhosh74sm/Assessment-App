@@ -132,6 +132,7 @@ export interface QuestionAttemptLog {
   studentAnswer: any;
   writtenExplanation?: string;
   enableWrittenExplanation?: boolean;
+  defaultInput?: boolean;
   correctAnswer?: any;
   correctAnswers?: string[];
   isCorrect?: boolean;

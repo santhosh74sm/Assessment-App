@@ -1921,6 +1921,7 @@ export function PublishAssessmentSection({
                   ? liveQ.enableWrittenExplanation
                   : liveQ.metadata?.enableWrittenExplanation
               ),
+              defaultInput: liveQ.defaultInput !== undefined ? Boolean(liveQ.defaultInput) : (liveQ.metadata?.defaultInput !== undefined ? Boolean(liveQ.metadata.defaultInput) : true),
               metadata: liveQ.metadata || {},
               pairs: liveQ.pairs || liveQ.metadata?.pairs || [],
               images: liveQ.images || [],
@@ -1973,6 +1974,7 @@ export function PublishAssessmentSection({
             ? q.enableWrittenExplanation
             : q.metadata?.enableWrittenExplanation
         ),
+        defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : (q.metadata?.defaultInput !== undefined ? Boolean(q.metadata.defaultInput) : true),
         metadata: q.metadata || {},
         pairs: q.pairs || q.metadata?.pairs || [],
         images: q.images || [],

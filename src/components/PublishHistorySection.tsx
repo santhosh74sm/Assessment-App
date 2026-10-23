@@ -1204,6 +1204,7 @@ function HistoricalAuditDrillDown({
             ? q.enableWrittenExplanation
             : q.metadata?.enableWrittenExplanation
         ),
+        defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : (q.metadata?.defaultInput !== undefined ? Boolean(q.metadata.defaultInput) : true),
         metadata: q.metadata || {},
         pairs: q.pairs || q.metadata?.pairs || [],
         images: Array.isArray(q.images) && q.images.length > 0 ? q.images : (q.metadata?.images || []),
