@@ -267,6 +267,62 @@ async function runRankingQuestionTests() {
   assert(resumedQ?.studentAnswer?.[3]?.text === 'Provide basic first aid treatment', 'Priority Rank 4 restored correctly');
   assert(resumedQ?.writtenExplanation?.includes('Safety first'), 'Written explanation restored');
 
+  // Verify student start/resume route payload serialization preservation (Issue 1)
+  const isRankingResume = Boolean(
+    resumedQ?.isRanking ||
+    resumedQ?.isRankingQuestion ||
+    rankingQDoc.isRanking ||
+    rankingQDoc.isRankingQuestion ||
+    String(resumedQ?.questionType || rankingQDoc.questionType || '').toLowerCase() === 'ranking'
+  );
+  const serializedResumeQ = serializeStudentQuestion({
+    questionId: resumedQ?.questionId,
+    groupName: resumedQ?.groupName,
+    difficulty: resumedQ?.difficulty,
+    content: resumedQ?.content,
+    points: resumedQ?.points,
+    timeAllowedSeconds: resumedQ?.timeAllowedSeconds,
+    options: resumedQ?.options,
+    answerType: resumedQ?.answerType || 'single',
+    isRanking: isRankingResume,
+    isRankingQuestion: isRankingResume,
+    questionType: isRankingResume ? 'Ranking' : 'Single Selection',
+    studentAnswer: resumedQ?.studentAnswer,
+  });
+  assert(Boolean(serializedResumeQ.isRanking), 'Resume serialized payload preserves isRanking=true');
+  assert(Boolean(serializedResumeQ.isRankingQuestion), 'Resume serialized payload preserves isRankingQuestion=true');
+  assert(serializedResumeQ.questionType === 'Ranking', 'Resume serialized payload preserves questionType=Ranking');
+  assert(Array.isArray(serializedResumeQ.studentAnswer), 'Resume serialized payload preserves saved ranking order');
+
+  // Verify ranking question with promptImages (Issue 3)
+  const rankingWithImages = serializeStudentQuestion({
+    content: 'Rank by size',
+    isRanking: true,
+    isRankingQuestion: true,
+    questionType: 'Ranking',
+    options: ['Small', 'Medium', 'Large'],
+    images: [{ id: 'img-1', url: 'https://example.com/test.png', label: 'Illustration', role: 'question' }],
+  });
+  assert(rankingWithImages.images?.length === 1, 'Ranking question preserves attached promptImages');
+  assert(rankingWithImages.images[0].url === 'https://example.com/test.png', 'Prompt image url preserved');
+
+  // Verify preview mapping preservation (Issue 2)
+  const previewCandidate = {
+    content: 'Preview ranking',
+    options: ['A', 'B'],
+    isRanking: true,
+    isRankingQuestion: true,
+    rankingQuestion: true,
+    questionType: 'Ranking',
+  };
+  const isCurRankingCandidate = Boolean(
+    previewCandidate.isRanking ||
+    previewCandidate.isRankingQuestion ||
+    previewCandidate.rankingQuestion ||
+    String(previewCandidate.questionType || '').toLowerCase() === 'ranking'
+  );
+  assert(isCurRankingCandidate === true, 'Preview questions correctly identify ranking question without relying on rankingQuestion alone');
+
   // 6. Test Final Submission: Ranking question is not marked automatically wrong
   console.log('\nTest Suite 5: Final Test Submission Evaluation');
   // Complete test

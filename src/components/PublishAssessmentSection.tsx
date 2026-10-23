@@ -1904,6 +1904,12 @@ export function PublishAssessmentSection({
         .map((id) => {
           const liveQ = qMap.get(String(id));
           if (liveQ) {
+            const isRanking = Boolean(
+              liveQ.isRanking ||
+              liveQ.isRankingQuestion ||
+              liveQ.rankingQuestion ||
+              String(liveQ.questionType || '').toLowerCase() === 'ranking'
+            );
             return {
               id: String(liveQ.id || liveQ._id),
               questionId: String(liveQ.id || liveQ._id),
@@ -1915,7 +1921,10 @@ export function PublishAssessmentSection({
               timeAllowedSeconds: liveQ.timeSeconds,
               options: liveQ.options || [],
               answerType: liveQ.answerType || 'single',
-              rankingQuestion: Boolean(liveQ.rankingQuestion),
+              isRanking,
+              isRankingQuestion: isRanking,
+              rankingQuestion: isRanking,
+              questionType: isRanking ? 'Ranking' : (liveQ.questionType || (liveQ.answerType === 'multiple' ? 'Multiple Selection' : 'Single Selection')),
               enableWrittenExplanation: Boolean(
                 liveQ.enableWrittenExplanation !== undefined
                   ? liveQ.enableWrittenExplanation
@@ -1957,30 +1966,41 @@ export function PublishAssessmentSection({
           : Math.min(5, pool.length);
       const sampled = pool.slice(0, targetCount);
 
-      return sampled.map((q) => ({
-        id: String(q.id || q._id),
-        questionId: String(q.id || q._id),
-        groupName: q.groupName,
-        difficulty: q.difficulty,
-        content: q.content,
-        points: q.points != null ? Number(q.points) : null,
-        timeSeconds: q.timeSeconds,
-        timeAllowedSeconds: q.timeSeconds,
-        options: q.options || [],
-        answerType: q.answerType || 'single',
-        rankingQuestion: Boolean(q.rankingQuestion),
-        enableWrittenExplanation: Boolean(
-          q.enableWrittenExplanation !== undefined
-            ? q.enableWrittenExplanation
-            : q.metadata?.enableWrittenExplanation
-        ),
-        defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : (q.metadata?.defaultInput !== undefined ? Boolean(q.metadata.defaultInput) : true),
-        metadata: q.metadata || {},
-        pairs: q.pairs || q.metadata?.pairs || [],
-        images: q.images || [],
-        imageLayout: q.imageLayout || 'auto',
-        isQuestionDeleted: false,
-      }));
+      return sampled.map((q) => {
+        const isRanking = Boolean(
+          q.isRanking ||
+          q.isRankingQuestion ||
+          q.rankingQuestion ||
+          String(q.questionType || '').toLowerCase() === 'ranking'
+        );
+        return {
+          id: String(q.id || q._id),
+          questionId: String(q.id || q._id),
+          groupName: q.groupName,
+          difficulty: q.difficulty,
+          content: q.content,
+          points: q.points != null ? Number(q.points) : null,
+          timeSeconds: q.timeSeconds,
+          timeAllowedSeconds: q.timeSeconds,
+          options: q.options || [],
+          answerType: q.answerType || 'single',
+          isRanking,
+          isRankingQuestion: isRanking,
+          rankingQuestion: isRanking,
+          questionType: isRanking ? 'Ranking' : (q.questionType || (q.answerType === 'multiple' ? 'Multiple Selection' : 'Single Selection')),
+          enableWrittenExplanation: Boolean(
+            q.enableWrittenExplanation !== undefined
+              ? q.enableWrittenExplanation
+              : q.metadata?.enableWrittenExplanation
+          ),
+          defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : (q.metadata?.defaultInput !== undefined ? Boolean(q.metadata.defaultInput) : true),
+          metadata: q.metadata || {},
+          pairs: q.pairs || q.metadata?.pairs || [],
+          images: q.images || [],
+          imageLayout: q.imageLayout || 'auto',
+          isQuestionDeleted: false,
+        };
+      });
     }
   }, [
     publishMode,

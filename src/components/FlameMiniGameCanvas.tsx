@@ -346,6 +346,153 @@ export function FlameMiniGameCanvas({
     ? [selectedAnswer]
     : [];
 
+  const renderPromptImages = () => {
+    const promptImages = (images || [])
+      .filter((img: any) => img.role !== 'option' && (img.optionIndex == null || img.optionIndex === ''))
+      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+
+    if (promptImages.length === 0) return null;
+
+    const isComparison =
+      imageLayout === 'comparison' ||
+      (imageLayout === 'auto' && promptImages.length === 2);
+
+    const isSingleHero =
+      imageLayout === 'single_top' ||
+      (imageLayout === 'auto' && promptImages.length === 1);
+
+    return (
+      <div className="my-4 max-w-4xl mx-auto">
+        {isComparison ? (
+          /* 2-Column Comparison Layout (Picture A & Picture B) */
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {promptImages.map((img: any, idx: number) => {
+              const defaultLabel = idx === 0 ? 'Picture A' : 'Picture B';
+              const displayLabel = img.label || defaultLabel;
+              return (
+                <div
+                  key={img.id || idx}
+                  className="flex flex-col rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 transition-colors"
+                >
+                  <div className="flex items-center justify-between px-3.5 py-2 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200">
+                    <span className="flex items-center gap-1.5 font-mono text-indigo-600 dark:text-indigo-400 font-bold">
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      {displayLabel}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveZoomImage(img)}
+                      className="p-1 rounded text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                      title="Click to enlarge"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div
+                    onClick={() => setActiveZoomImage(img)}
+                    className="p-3 bg-slate-100/60 dark:bg-slate-950/40 flex items-center justify-center cursor-pointer min-h-[180px] max-h-[300px] overflow-hidden group"
+                  >
+                    <img
+                      src={img.url}
+                      alt={displayLabel}
+                      className="max-h-[260px] w-auto max-w-full object-contain rounded-md transition-transform duration-200 group-hover:scale-[1.02]"
+                      loading="lazy"
+                    />
+                  </div>
+                  {img.caption && (
+                    <div className="px-3.5 py-2 text-xs text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800">
+                      {img.caption}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : isSingleHero ? (
+          /* Single Main Illustration Layout */
+          <div className="max-w-2xl mx-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
+            {promptImages[0].label && (
+              <div className="flex items-center justify-between px-4 py-2 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200">
+                <span className="flex items-center gap-1.5 font-mono text-indigo-600 dark:text-indigo-400 font-bold">
+                  <ImageIcon className="w-3.5 h-3.5" />
+                  {promptImages[0].label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setActiveZoomImage(promptImages[0])}
+                  className="p-1 rounded text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                  title="Click to enlarge"
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+            <div
+              onClick={() => setActiveZoomImage(promptImages[0])}
+              className="p-4 bg-slate-100/60 dark:bg-slate-950/40 flex items-center justify-center cursor-pointer min-h-[200px] max-h-[360px] overflow-hidden group relative"
+            >
+              <img
+                src={promptImages[0].url}
+                alt={promptImages[0].label || 'Illustration'}
+                className="max-h-[320px] w-auto max-w-full object-contain rounded-md transition-transform duration-200 group-hover:scale-[1.01]"
+                loading="lazy"
+              />
+              <div className="absolute bottom-2 right-2 px-2 py-1 rounded bg-black/60 text-white text-[11px] font-medium opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 pointer-events-none">
+                <Maximize2 className="w-3 h-3" />
+                <span>Click to enlarge</span>
+              </div>
+            </div>
+            {promptImages[0].caption && (
+              <div className="px-4 py-2 text-xs text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 text-center">
+                {promptImages[0].caption}
+              </div>
+            )}
+          </div>
+        ) : (
+          /* Multi-Image Grid Layout (3+ Images) */
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {promptImages.map((img: any, idx: number) => (
+              <div
+                key={img.id || idx}
+                className="flex flex-col rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 transition-colors"
+              >
+                <div className="flex items-center justify-between px-3 py-1.5 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold">
+                  <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold truncate">
+                    {img.label || `Figure ${idx + 1}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveZoomImage(img)}
+                    className="p-1 rounded text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer"
+                    title="Click to enlarge"
+                  >
+                    <Maximize2 className="w-3 h-3" />
+                  </button>
+                </div>
+                <div
+                  onClick={() => setActiveZoomImage(img)}
+                  className="p-2 bg-slate-100/60 dark:bg-slate-950/40 flex items-center justify-center cursor-pointer min-h-[140px] max-h-[200px] overflow-hidden group"
+                >
+                  <img
+                    src={img.url}
+                    alt={img.label || `Image ${idx + 1}`}
+                    className="max-h-[180px] w-auto max-w-full object-contain rounded transition-transform group-hover:scale-[1.02]"
+                    loading="lazy"
+                  />
+                </div>
+                {img.caption && (
+                  <div className="px-3 py-1.5 text-[11px] text-slate-600 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800">
+                    {img.caption}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="relative w-full rounded-2xl overflow-hidden bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm p-5 sm:p-7 text-slate-900 dark:text-white">
       {/* Background Animated Canvas (Subtle focus field) */}
@@ -471,6 +618,9 @@ export function FlameMiniGameCanvas({
               </p>
             </div>
 
+            {/* Pictorial Prompt Illustrations for Ranking Question */}
+            {renderPromptImages()}
+
             <div
               role="list"
               aria-label="Statements to rank"
@@ -574,152 +724,7 @@ export function FlameMiniGameCanvas({
             </div>
 
             {/* Pictorial Prompt Illustrations (Single Hero, Comparison A/B, or Multi-Image Grid) */}
-            {(() => {
-              const promptImages = (images || [])
-                .filter((img: any) => img.role !== 'option' && (img.optionIndex == null || img.optionIndex === ''))
-                .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
-
-              if (promptImages.length === 0) return null;
-
-              const isComparison =
-                imageLayout === 'comparison' ||
-                (imageLayout === 'auto' && promptImages.length === 2);
-
-              const isSingleHero =
-                imageLayout === 'single_top' ||
-                (imageLayout === 'auto' && promptImages.length === 1);
-
-              return (
-                <div className="my-4 max-w-4xl mx-auto">
-                  {isComparison ? (
-                    /* 2-Column Comparison Layout (Picture A & Picture B) */
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {promptImages.map((img: any, idx: number) => {
-                        const defaultLabel = idx === 0 ? 'Picture A' : 'Picture B';
-                        const displayLabel = img.label || defaultLabel;
-                        return (
-                          <div
-                            key={img.id || idx}
-                            className="flex flex-col rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 transition-colors"
-                          >
-                            <div className="flex items-center justify-between px-3.5 py-2 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200">
-                              <span className="flex items-center gap-1.5 font-mono text-indigo-600 dark:text-indigo-400 font-bold">
-                                <ImageIcon className="w-3.5 h-3.5" />
-                                {displayLabel}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => setActiveZoomImage(img)}
-                                className="p-1 rounded text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
-                                title="Click to enlarge"
-                              >
-                                <Maximize2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                            <div
-                              onClick={() => setActiveZoomImage(img)}
-                              className="p-3 bg-slate-100/60 dark:bg-slate-950/40 flex items-center justify-center cursor-pointer min-h-[180px] max-h-[300px] overflow-hidden group"
-                            >
-                              <img
-                                src={img.url}
-                                alt={displayLabel}
-                                className="max-h-[260px] w-auto max-w-full object-contain rounded-md transition-transform duration-200 group-hover:scale-[1.02]"
-                                loading="lazy"
-                              />
-                            </div>
-                            {img.caption && (
-                              <div className="px-3.5 py-2 text-xs text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800">
-                                {img.caption}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : isSingleHero ? (
-                    /* Single Main Illustration Layout */
-                    <div className="max-w-2xl mx-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs">
-                      {promptImages[0].label && (
-                        <div className="flex items-center justify-between px-4 py-2 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200">
-                          <span className="flex items-center gap-1.5 font-mono text-indigo-600 dark:text-indigo-400 font-bold">
-                            <ImageIcon className="w-3.5 h-3.5" />
-                            {promptImages[0].label}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setActiveZoomImage(promptImages[0])}
-                            className="p-1 rounded text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
-                            title="Click to enlarge"
-                          >
-                            <Maximize2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      )}
-                      <div
-                        onClick={() => setActiveZoomImage(promptImages[0])}
-                        className="p-4 bg-slate-100/60 dark:bg-slate-950/40 flex items-center justify-center cursor-pointer min-h-[200px] max-h-[360px] overflow-hidden group relative"
-                      >
-                        <img
-                          src={promptImages[0].url}
-                          alt={promptImages[0].label || 'Illustration'}
-                          className="max-h-[320px] w-auto max-w-full object-contain rounded-md transition-transform duration-200 group-hover:scale-[1.01]"
-                          loading="lazy"
-                        />
-                        <div className="absolute bottom-2 right-2 px-2 py-1 rounded bg-black/60 text-white text-[11px] font-medium opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 pointer-events-none">
-                          <Maximize2 className="w-3 h-3" />
-                          <span>Click to enlarge</span>
-                        </div>
-                      </div>
-                      {promptImages[0].caption && (
-                        <div className="px-4 py-2 text-xs text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 text-center">
-                          {promptImages[0].caption}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    /* Multi-Image Grid Layout (3+ Images) */
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {promptImages.map((img: any, idx: number) => (
-                        <div
-                          key={img.id || idx}
-                          className="flex flex-col rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 transition-colors"
-                        >
-                          <div className="flex items-center justify-between px-3 py-1.5 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold">
-                            <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold truncate">
-                              {img.label || `Figure ${idx + 1}`}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setActiveZoomImage(img)}
-                              className="p-1 rounded text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer"
-                              title="Click to enlarge"
-                            >
-                              <Maximize2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                          <div
-                            onClick={() => setActiveZoomImage(img)}
-                            className="p-2 bg-slate-100/60 dark:bg-slate-950/40 flex items-center justify-center cursor-pointer min-h-[140px] max-h-[200px] overflow-hidden group"
-                          >
-                            <img
-                              src={img.url}
-                              alt={img.label || `Image ${idx + 1}`}
-                              className="max-h-[180px] w-auto max-w-full object-contain rounded transition-transform group-hover:scale-[1.02]"
-                              loading="lazy"
-                            />
-                          </div>
-                          {img.caption && (
-                            <div className="px-3 py-1.5 text-[11px] text-slate-600 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800">
-                              {img.caption}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+            {renderPromptImages()}
 
             {/* Answer Options (with optional per-option illustrations) */}
             {options && options.length > 0 ? (

@@ -4517,6 +4517,13 @@ router.post('/student/tests/:assignmentId/start', authenticate, async (req: Requ
       }
       const sanitizedQuestions = (assignment.questions || []).map((q: any) => {
         const fullQ = qMap.get(String(q.questionId || q.id || q._id));
+        const isRanking = Boolean(
+          q.isRanking ||
+          q.isRankingQuestion ||
+          fullQ?.isRanking ||
+          fullQ?.isRankingQuestion ||
+          String(q.questionType || fullQ?.questionType || '').toLowerCase() === 'ranking'
+        );
         return serializeStudentQuestion({
           questionId: q.questionId || q.id || q._id,
           groupName: q.groupName || fullQ?.groupName || 'General',
@@ -4526,6 +4533,9 @@ router.post('/student/tests/:assignmentId/start', authenticate, async (req: Requ
           timeAllowedSeconds: q.timeAllowedSeconds != null ? Number(q.timeAllowedSeconds) : (fullQ?.timeSeconds != null ? Number(fullQ.timeSeconds) : null),
           options: (q.options && q.options.length > 0) ? q.options : (fullQ?.options || []),
           answerType: q.answerType || fullQ?.answerType || 'single',
+          isRanking,
+          isRankingQuestion: isRanking,
+          questionType: isRanking ? 'Ranking' : (q.questionType || fullQ?.questionType || (q.answerType === 'multiple' ? 'Multiple Selection' : 'Single Selection')),
           enableWrittenExplanation: q.enableWrittenExplanation !== undefined ? q.enableWrittenExplanation : fullQ?.enableWrittenExplanation,
           defaultInput: q.defaultInput !== undefined ? q.defaultInput : (fullQ?.defaultInput !== undefined ? fullQ.defaultInput : true),
           writtenExplanation: q.writtenExplanation !== undefined ? q.writtenExplanation : '',
@@ -4594,6 +4604,13 @@ router.post('/student/tests/:assignmentId/start', authenticate, async (req: Requ
 
     const sanitizedQuestions = assignment.questions.map((q: any) => {
       const fullQ = qMap.get(String(q.questionId || q.id || q._id));
+      const isRanking = Boolean(
+        q.isRanking ||
+        q.isRankingQuestion ||
+        fullQ?.isRanking ||
+        fullQ?.isRankingQuestion ||
+        String(q.questionType || fullQ?.questionType || '').toLowerCase() === 'ranking'
+      );
       return serializeStudentQuestion({
         questionId: q.questionId || q.id || q._id,
         groupName: q.groupName || fullQ?.groupName || 'General',
@@ -4603,6 +4620,9 @@ router.post('/student/tests/:assignmentId/start', authenticate, async (req: Requ
         timeAllowedSeconds: q.timeAllowedSeconds != null ? Number(q.timeAllowedSeconds) : (fullQ?.timeSeconds != null ? Number(fullQ.timeSeconds) : null),
         options: (q.options && q.options.length > 0) ? q.options : (fullQ?.options || []),
         answerType: q.answerType || fullQ?.answerType || 'single',
+        isRanking,
+        isRankingQuestion: isRanking,
+        questionType: isRanking ? 'Ranking' : (q.questionType || fullQ?.questionType || (q.answerType === 'multiple' ? 'Multiple Selection' : 'Single Selection')),
         enableWrittenExplanation: q.enableWrittenExplanation !== undefined ? q.enableWrittenExplanation : fullQ?.enableWrittenExplanation,
         defaultInput: q.defaultInput !== undefined ? q.defaultInput : (fullQ?.defaultInput !== undefined ? fullQ.defaultInput : true),
         writtenExplanation: q.writtenExplanation !== undefined ? q.writtenExplanation : '',
@@ -4611,7 +4631,7 @@ router.post('/student/tests/:assignmentId/start', authenticate, async (req: Requ
         images: q.images || fullQ?.images || [],
         imageLayout: q.imageLayout || fullQ?.imageLayout || 'auto',
         timeTakenSeconds: q.timeTakenSeconds || 0,
-        studentAnswer: q.studentAnswer,
+        studentAnswer: q.studentAnswer !== undefined ? q.studentAnswer : null,
       });
     });
 

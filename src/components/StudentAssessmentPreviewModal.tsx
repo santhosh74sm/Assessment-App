@@ -23,6 +23,7 @@ export interface AssessmentPreviewQuestion {
   answerType?: 'single' | 'multiple';
   isRanking?: boolean;
   isRankingQuestion?: boolean;
+  rankingQuestion?: boolean;
   questionType?: string;
   enableWrittenExplanation?: boolean;
   defaultInput?: boolean;
@@ -94,6 +95,7 @@ export function StudentAssessmentPreviewModal({
     const isCurRanking = Boolean(
       currentQ?.isRanking ||
       currentQ?.isRankingQuestion ||
+      currentQ?.rankingQuestion ||
       String(currentQ?.questionType || '').toLowerCase() === 'ranking'
     );
     const existingAns =
@@ -335,9 +337,9 @@ export function StudentAssessmentPreviewModal({
                 timeRemaining={timeRemaining > 0 ? timeRemaining : undefined}
                 options={currentQ.options || []}
                 answerType={currentQ.answerType || 'single'}
-                isRanking={Boolean(currentQ.isRanking || currentQ.isRankingQuestion || String(currentQ.questionType || '').toLowerCase() === 'ranking')}
-                isRankingQuestion={Boolean(currentQ.isRanking || currentQ.isRankingQuestion || String(currentQ.questionType || '').toLowerCase() === 'ranking')}
-                questionType={currentQ.questionType}
+                isRanking={Boolean(currentQ.isRanking || currentQ.isRankingQuestion || currentQ.rankingQuestion || String(currentQ.questionType || '').toLowerCase() === 'ranking')}
+                isRankingQuestion={Boolean(currentQ.isRanking || currentQ.isRankingQuestion || currentQ.rankingQuestion || String(currentQ.questionType || '').toLowerCase() === 'ranking')}
+                questionType={currentQ.questionType || (Boolean(currentQ.isRanking || currentQ.isRankingQuestion || currentQ.rankingQuestion || String(currentQ.questionType || '').toLowerCase() === 'ranking') ? 'Ranking' : undefined)}
                 defaultInput={currentQ.defaultInput !== undefined ? Boolean(currentQ.defaultInput) : true}
                 pairs={currentQ.metadata?.pairs || currentQ.pairs || []}
                 images={Array.isArray(currentQ.images) && currentQ.images.length > 0 ? currentQ.images : (currentQ.metadata?.images || [])}

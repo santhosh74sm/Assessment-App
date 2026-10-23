@@ -1187,30 +1187,41 @@ function HistoricalAuditDrillDown({
     const rawQuestions = Array.isArray(detail?.questions) ? detail.questions : [];
     return rawQuestions
       .filter((q: any) => !q.isQuestionDeleted)
-      .map((q: any) => ({
-        id: q.id || q._id || q.questionId,
-        questionId: q.questionId || q.id || q._id,
-        groupName: q.groupName,
-        difficulty: q.difficulty,
-        content: q.content,
-        points: q.points != null ? Number(q.points) : null,
-        timeSeconds: q.timeAllowedSeconds ?? q.timeSeconds,
-        timeAllowedSeconds: q.timeAllowedSeconds ?? q.timeSeconds,
-        options: q.options || [],
-        answerType: q.answerType || 'single',
-        rankingQuestion: Boolean(q.rankingQuestion),
-        enableWrittenExplanation: Boolean(
-          q.enableWrittenExplanation !== undefined
-            ? q.enableWrittenExplanation
-            : q.metadata?.enableWrittenExplanation
-        ),
-        defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : (q.metadata?.defaultInput !== undefined ? Boolean(q.metadata.defaultInput) : true),
-        metadata: q.metadata || {},
-        pairs: q.pairs || q.metadata?.pairs || [],
-        images: Array.isArray(q.images) && q.images.length > 0 ? q.images : (q.metadata?.images || []),
-        imageLayout: q.imageLayout || q.metadata?.imageLayout || 'auto',
-        isQuestionDeleted: false,
-      }));
+      .map((q: any) => {
+        const isRanking = Boolean(
+          q.isRanking ||
+          q.isRankingQuestion ||
+          q.rankingQuestion ||
+          String(q.questionType || '').toLowerCase() === 'ranking'
+        );
+        return {
+          id: q.id || q._id || q.questionId,
+          questionId: q.questionId || q.id || q._id,
+          groupName: q.groupName,
+          difficulty: q.difficulty,
+          content: q.content,
+          points: q.points != null ? Number(q.points) : null,
+          timeSeconds: q.timeAllowedSeconds ?? q.timeSeconds,
+          timeAllowedSeconds: q.timeAllowedSeconds ?? q.timeSeconds,
+          options: q.options || [],
+          answerType: q.answerType || 'single',
+          isRanking,
+          isRankingQuestion: isRanking,
+          rankingQuestion: isRanking,
+          questionType: isRanking ? 'Ranking' : (q.questionType || (q.answerType === 'multiple' ? 'Multiple Selection' : 'Single Selection')),
+          enableWrittenExplanation: Boolean(
+            q.enableWrittenExplanation !== undefined
+              ? q.enableWrittenExplanation
+              : q.metadata?.enableWrittenExplanation
+          ),
+          defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : (q.metadata?.defaultInput !== undefined ? Boolean(q.metadata.defaultInput) : true),
+          metadata: q.metadata || {},
+          pairs: q.pairs || q.metadata?.pairs || [],
+          images: Array.isArray(q.images) && q.images.length > 0 ? q.images : (q.metadata?.images || []),
+          imageLayout: q.imageLayout || q.metadata?.imageLayout || 'auto',
+          isQuestionDeleted: false,
+        };
+      });
   }, [detail?.questions]);
 
   // Target Configuration(s) stored for this publish
