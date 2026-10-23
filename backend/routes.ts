@@ -1761,6 +1761,7 @@ router.post('/questions', authenticate, requireRole('super_admin'), async (req: 
       correctAnswer,
       correctAnswers,
       enableWrittenExplanation,
+      defaultInput,
       scoringGuide,
       expectedResponse,
       images,
@@ -1845,6 +1846,7 @@ router.post('/questions', authenticate, requireRole('super_admin'), async (req: 
       correctAnswer: finalCorrectAnswer,
       correctAnswers: finalCorrectAnswers,
       enableWrittenExplanation: Boolean(enableWrittenExplanation),
+      defaultInput: defaultInput !== undefined ? Boolean(defaultInput) : true,
       scoringGuide: scoringGuide || metadata?.scoringGuide,
       expectedResponse: expectedResponse || metadata?.expectedResponse,
       images: sanitizedImages,
@@ -1876,6 +1878,7 @@ router.put('/questions/:id', authenticate, requireRole('super_admin'), async (re
       correctAnswer,
       correctAnswers,
       enableWrittenExplanation,
+      defaultInput,
       scoringGuide,
       expectedResponse,
       images,
@@ -1993,6 +1996,10 @@ router.put('/questions/:id', authenticate, requireRole('super_admin'), async (re
       question.enableWrittenExplanation = Boolean(enableWrittenExplanation);
     }
 
+    if (defaultInput !== undefined) {
+      question.defaultInput = Boolean(defaultInput);
+    }
+
     if (metadata) {
       question.metadata = metadata;
     }
@@ -2037,6 +2044,7 @@ router.put('/questions/:id', authenticate, requireRole('super_admin'), async (re
             q.timeAllowedSeconds = question.timeSeconds != null ? Number(question.timeSeconds) : null;
             q.timeSeconds = question.timeSeconds != null ? Number(question.timeSeconds) : null;
             q.enableWrittenExplanation = Boolean(question.enableWrittenExplanation);
+            q.defaultInput = question.defaultInput !== undefined ? Boolean(question.defaultInput) : true;
             q.correctAnswer = question.correctAnswer;
             q.correctAnswers = question.correctAnswers;
             q.images = question.images || [];
@@ -2086,6 +2094,7 @@ router.put('/questions/:id', authenticate, requireRole('super_admin'), async (re
             snap.isRankingQuestion = Boolean(question.isRanking || question.isRankingQuestion);
             if (question.questionType) snap.questionType = question.questionType;
             snap.enableWrittenExplanation = Boolean(question.enableWrittenExplanation);
+            snap.defaultInput = question.defaultInput !== undefined ? Boolean(question.defaultInput) : true;
             snap.correctAnswer = question.correctAnswer ?? null;
             snap.correctAnswers = Array.isArray(question.correctAnswers)
               ? question.correctAnswers
@@ -2137,6 +2146,7 @@ router.put('/questions/:id', authenticate, requireRole('super_admin'), async (re
             snap.isRankingQuestion = Boolean(question.isRanking || question.isRankingQuestion);
             if (question.questionType) snap.questionType = question.questionType;
             snap.enableWrittenExplanation = Boolean(question.enableWrittenExplanation);
+            snap.defaultInput = question.defaultInput !== undefined ? Boolean(question.defaultInput) : true;
             snap.correctAnswer = question.correctAnswer ?? null;
             snap.correctAnswers = Array.isArray(question.correctAnswers)
               ? question.correctAnswers
@@ -2641,6 +2651,12 @@ router.post(
           ? ['true', 'yes', '1', 'y', 'enabled'].includes(rawExplanation.toLowerCase())
           : false;
 
+        // Default Input (defaults to true if column omitted or empty)
+        const rawDefaultInput = getCol('Default Input', 'Show Default Input');
+        const defaultInput = rawDefaultInput
+          ? !['false', 'no', '0', 'n', 'disabled'].includes(rawDefaultInput.toLowerCase())
+          : true;
+
         // Image / Visual Prompts
         const rowImages: any[] = [];
         const mainImage = getCol('Image', 'Image Name', 'Main Image', 'Picture', 'Image URL');
@@ -2685,6 +2701,7 @@ router.post(
           correctAnswer,
           correctAnswers,
           enableWrittenExplanation,
+          defaultInput,
           images: rowImages,
           imageLayout,
           metadata: {
@@ -3480,6 +3497,7 @@ router.post('/publish', authenticate, requireRole('super_admin'), async (req: Re
           ? q.correctAnswers
           : (Array.isArray(q.correctAnswer) ? q.correctAnswer : (q.correctAnswer ? [String(q.correctAnswer)] : [])),
         enableWrittenExplanation: Boolean(q.enableWrittenExplanation),
+        defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : true,
         scoringGuide: q.scoringGuide || q.metadata?.scoringGuide,
         expectedResponse: q.expectedResponse || q.metadata?.expectedResponse,
         metadata: q.metadata || {},
@@ -3549,6 +3567,7 @@ router.post('/publish', authenticate, requireRole('super_admin'), async (req: Re
         studentAnswer: null,
         writtenExplanation: '',
         enableWrittenExplanation: Boolean(q.enableWrittenExplanation),
+        defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : true,
         correctAnswer: q.correctAnswer ?? null,
         correctAnswers: Array.isArray(q.correctAnswers)
           ? q.correctAnswers
@@ -3938,6 +3957,7 @@ const handleUpdatePublishedAssessment = async (req: Request, res: Response) => {
       isRankingQuestion: Boolean(q.isRanking || q.isRankingQuestion || String(q.questionType || '').toLowerCase() === 'ranking'),
       questionType: q.questionType || (q.isRanking ? 'Ranking' : undefined),
       enableWrittenExplanation: Boolean(q.enableWrittenExplanation),
+      defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : true,
       scoringGuide: q.scoringGuide || q.metadata?.scoringGuide,
       expectedResponse: q.expectedResponse || q.metadata?.expectedResponse,
       metadata: q.metadata || {},
@@ -4065,6 +4085,7 @@ const handleUpdatePublishedAssessment = async (req: Request, res: Response) => {
           studentAnswer: null,
           writtenExplanation: '',
           enableWrittenExplanation: Boolean(q.enableWrittenExplanation),
+          defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : true,
           correctAnswer: q.correctAnswer ?? null,
           correctAnswers: Array.isArray(q.correctAnswers)
             ? q.correctAnswers
@@ -4129,6 +4150,7 @@ const handleUpdatePublishedAssessment = async (req: Request, res: Response) => {
               studentAnswer: null,
               writtenExplanation: '',
               enableWrittenExplanation: Boolean(q.enableWrittenExplanation),
+              defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : true,
               answerType: q.answerType || 'single',
               correctAnswer: q.correctAnswer ?? null,
               correctAnswers: Array.isArray(q.correctAnswers)
@@ -4163,6 +4185,7 @@ const handleUpdatePublishedAssessment = async (req: Request, res: Response) => {
               studentAnswer: null,
               writtenExplanation: '',
               enableWrittenExplanation: Boolean(q.enableWrittenExplanation),
+              defaultInput: q.defaultInput !== undefined ? Boolean(q.defaultInput) : true,
               answerType: q.answerType || 'single',
               correctAnswer: q.correctAnswer ?? null,
               correctAnswers: Array.isArray(q.correctAnswers)
@@ -4504,6 +4527,7 @@ router.post('/student/tests/:assignmentId/start', authenticate, async (req: Requ
           options: (q.options && q.options.length > 0) ? q.options : (fullQ?.options || []),
           answerType: q.answerType || fullQ?.answerType || 'single',
           enableWrittenExplanation: q.enableWrittenExplanation !== undefined ? q.enableWrittenExplanation : fullQ?.enableWrittenExplanation,
+          defaultInput: q.defaultInput !== undefined ? q.defaultInput : (fullQ?.defaultInput !== undefined ? fullQ.defaultInput : true),
           writtenExplanation: q.writtenExplanation !== undefined ? q.writtenExplanation : '',
           metadata: q.metadata || fullQ?.metadata || {},
           pairs: q.pairs || fullQ?.pairs || fullQ?.metadata?.pairs || q.metadata?.pairs || [],
@@ -4580,6 +4604,7 @@ router.post('/student/tests/:assignmentId/start', authenticate, async (req: Requ
         options: (q.options && q.options.length > 0) ? q.options : (fullQ?.options || []),
         answerType: q.answerType || fullQ?.answerType || 'single',
         enableWrittenExplanation: q.enableWrittenExplanation !== undefined ? q.enableWrittenExplanation : fullQ?.enableWrittenExplanation,
+        defaultInput: q.defaultInput !== undefined ? q.defaultInput : (fullQ?.defaultInput !== undefined ? fullQ.defaultInput : true),
         writtenExplanation: q.writtenExplanation !== undefined ? q.writtenExplanation : '',
         metadata: q.metadata || fullQ?.metadata || {},
         pairs: q.pairs || fullQ?.pairs || fullQ?.metadata?.pairs || q.metadata?.pairs || [],
@@ -5416,6 +5441,9 @@ router.get('/publish-history/:publishId', authenticate, requireRole('super_admin
           enableWrittenExplanation: liveQ
             ? Boolean(liveQ.enableWrittenExplanation !== undefined ? liveQ.enableWrittenExplanation : (liveQ.metadata?.enableWrittenExplanation ?? snap.enableWrittenExplanation))
             : Boolean(snap.enableWrittenExplanation !== undefined ? snap.enableWrittenExplanation : snap.metadata?.enableWrittenExplanation),
+          defaultInput: liveQ?.defaultInput !== undefined
+            ? Boolean(liveQ.defaultInput)
+            : (snap.defaultInput !== undefined ? Boolean(snap.defaultInput) : true),
           metadata: (liveQ ? liveQ.metadata : snap.metadata) || {},
           pairs: (liveQ ? liveQ.metadata?.pairs : (snap.pairs || snap.metadata?.pairs)) || [],
           images:

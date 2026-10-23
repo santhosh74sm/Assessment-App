@@ -26,6 +26,7 @@ export function serializeStudentQuestion(question: any): Record<string, any> {
     'isRanking',
     'isRankingQuestion',
     'imageLayout',
+    'defaultInput',
   ];
 
   if (questionId != null) {
@@ -54,6 +55,9 @@ export function serializeStudentQuestion(question: any): Record<string, any> {
 
   // Always supply a boolean for enableWrittenExplanation (default false for older questions)
   safe.enableWrittenExplanation = Boolean(source.enableWrittenExplanation);
+
+  // Backward compatibility: defaultInput defaults to true if undefined or missing
+  safe.defaultInput = source.defaultInput !== undefined ? Boolean(source.defaultInput) : true;
 
   // Supply boolean for isRanking / isRankingQuestion
   const isRanking = Boolean(source.isRanking || source.isRankingQuestion || source.questionType?.toLowerCase() === 'ranking');

@@ -21,6 +21,7 @@ interface FlameMiniGameProps {
   pairs?: { left: string; right: string }[];
   images?: any[];
   imageLayout?: 'single_top' | 'comparison' | 'options_grid' | 'auto';
+  defaultInput?: boolean;
   onAnswerSubmit: (answer: any) => void;
   selectedAnswer: any;
   disabled: boolean;
@@ -37,6 +38,7 @@ export function FlameMiniGameCanvas({
   pairs = [],
   images = [],
   imageLayout = 'auto',
+  defaultInput = true,
   onAnswerSubmit,
   selectedAnswer,
   disabled,
@@ -825,7 +827,7 @@ export function FlameMiniGameCanvas({
                   })}
                 </div>
               </div>
-            ) : (
+            ) : defaultInput !== false ? (
               <div className="max-w-md mx-auto">
                 <input
                   type="text"
@@ -836,7 +838,7 @@ export function FlameMiniGameCanvas({
                   className="w-full px-4 py-3 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-indigo-600 dark:focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 shadow-xs"
                 />
               </div>
-            )}
+            ) : null}
           </div>
         )}
 

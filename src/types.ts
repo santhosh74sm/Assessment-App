@@ -70,6 +70,7 @@ export interface Question {
   correctAnswer?: any; // string, number, or record of match pairs
   correctAnswers?: string[];
   enableWrittenExplanation?: boolean;
+  defaultInput?: boolean;
   scoringGuide?: string;
   expectedResponse?: any;
   images?: QuestionImage[];

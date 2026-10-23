@@ -174,6 +174,7 @@ export interface IQuestionDocument extends Document {
   correctAnswer?: any;
   correctAnswers?: string[];
   enableWrittenExplanation?: boolean;
+  defaultInput?: boolean;
   scoringGuide?: string;
   expectedResponse?: any;
   images?: any[];
@@ -199,6 +200,7 @@ export const QuestionSchema = new Schema<IQuestionDocument>(
     correctAnswer: { type: Schema.Types.Mixed, required: false, default: null },
     correctAnswers: { type: [String], default: [] },
     enableWrittenExplanation: { type: Boolean, default: false },
+    defaultInput: { type: Boolean, default: true },
     scoringGuide: { type: String, required: false },
     expectedResponse: { type: Schema.Types.Mixed, required: false },
     images: { type: [Schema.Types.Mixed], default: [] },
