@@ -396,24 +396,10 @@ export function StudentReportDetailView({
                                               key={sIdx}
                                               className="px-3 py-1.5 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-xs flex items-center gap-2.5"
                                             >
-                                              <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold font-mono shrink-0 ${
-                                                itemAns.rank === 1
-                                                  ? 'bg-amber-500 text-white'
-                                                  : 'bg-indigo-600 text-white'
-                                              }`}>
+                                              <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold font-mono shrink-0 bg-indigo-600 text-white">
                                                 {itemAns.rank}
                                               </span>
                                               <span className="font-medium text-slate-800 dark:text-slate-200 flex-1">{itemAns.text}</span>
-                                              {itemAns.rank === 1 && (
-                                                <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-300 uppercase shrink-0">
-                                                  Highest Priority
-                                                </span>
-                                              )}
-                                              {itemAns.rank === rankingList.length && rankingList.length > 2 && (
-                                                <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 uppercase shrink-0">
-                                                  Lowest Priority
-                                                </span>
-                                              )}
                                             </div>
                                           ))}
                                         </div>
