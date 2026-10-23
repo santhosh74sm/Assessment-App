@@ -354,29 +354,33 @@ export function FlameMiniGameCanvas({
     if (promptImages.length === 0) return null;
 
     const isComparison =
-      imageLayout === 'comparison' ||
-      (imageLayout === 'auto' && promptImages.length === 2);
+      (!isRankingMode && (
+        imageLayout === 'comparison' ||
+        (imageLayout === 'auto' && promptImages.length === 2)
+      )) || (
+        isRankingMode && promptImages.length === 2
+      );
 
     const isSingleHero =
       imageLayout === 'single_top' ||
       (imageLayout === 'auto' && promptImages.length === 1);
 
     return (
-      <div className="my-4 max-w-4xl mx-auto">
+      <div className={`my-4 ${isRankingMode ? 'max-w-3xl' : 'max-w-4xl'} mx-auto`}>
         {isComparison ? (
           /* 2-Column Comparison Layout (Picture A & Picture B) */
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {promptImages.map((img: any, idx: number) => {
-              const defaultLabel = idx === 0 ? 'Picture A' : 'Picture B';
+              const defaultLabel = idx === 0 ? 'Picture A' : (idx === 1 ? 'Picture B' : `Picture ${String.fromCharCode(65 + idx)}`);
               const displayLabel = img.label || defaultLabel;
               return (
                 <div
                   key={img.id || idx}
-                  className="flex flex-col rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 transition-colors"
+                  className="flex flex-col h-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 transition-colors"
                 >
                   <div className="flex items-center justify-between px-3.5 py-2 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200">
-                    <span className="flex items-center gap-1.5 font-mono text-indigo-600 dark:text-indigo-400 font-bold">
-                      <ImageIcon className="w-3.5 h-3.5" />
+                    <span className="flex items-center gap-1.5 font-mono text-indigo-600 dark:text-indigo-400 font-bold truncate">
+                      <ImageIcon className="w-3.5 h-3.5 shrink-0" />
                       {displayLabel}
                     </span>
                     <button
@@ -390,7 +394,7 @@ export function FlameMiniGameCanvas({
                   </div>
                   <div
                     onClick={() => setActiveZoomImage(img)}
-                    className="p-3 bg-slate-100/60 dark:bg-slate-950/40 flex items-center justify-center cursor-pointer min-h-[180px] max-h-[300px] overflow-hidden group"
+                    className="flex-1 p-3 bg-slate-100/60 dark:bg-slate-950/40 flex items-center justify-center cursor-pointer min-h-[180px] max-h-[300px] overflow-hidden group"
                   >
                     <img
                       src={img.url}
@@ -449,44 +453,49 @@ export function FlameMiniGameCanvas({
             )}
           </div>
         ) : (
-          /* Multi-Image Grid Layout (3+ Images) */
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {promptImages.map((img: any, idx: number) => (
-              <div
-                key={img.id || idx}
-                className="flex flex-col rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 transition-colors"
-              >
-                <div className="flex items-center justify-between px-3 py-1.5 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold">
-                  <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold truncate">
-                    {img.label || `Figure ${idx + 1}`}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setActiveZoomImage(img)}
-                    className="p-1 rounded text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer"
-                    title="Click to enlarge"
-                  >
-                    <Maximize2 className="w-3 h-3" />
-                  </button>
-                </div>
+          /* Multi-Image Grid Layout (3+ Images, or 2x2 for Ranking) */
+          <div className={`grid grid-cols-1 sm:grid-cols-2 ${isRankingMode ? '' : 'lg:grid-cols-3'} gap-3 sm:gap-4`}>
+            {promptImages.map((img: any, idx: number) => {
+              const defaultLabel = isRankingMode ? `Picture ${String.fromCharCode(65 + idx)}` : `Figure ${idx + 1}`;
+              const displayLabel = img.label || defaultLabel;
+              return (
                 <div
-                  onClick={() => setActiveZoomImage(img)}
-                  className="p-2 bg-slate-100/60 dark:bg-slate-950/40 flex items-center justify-center cursor-pointer min-h-[140px] max-h-[200px] overflow-hidden group"
+                  key={img.id || idx}
+                  className="flex flex-col h-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 transition-colors"
                 >
-                  <img
-                    src={img.url}
-                    alt={img.label || `Image ${idx + 1}`}
-                    className="max-h-[180px] w-auto max-w-full object-contain rounded transition-transform group-hover:scale-[1.02]"
-                    loading="lazy"
-                  />
-                </div>
-                {img.caption && (
-                  <div className="px-3 py-1.5 text-[11px] text-slate-600 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800">
-                    {img.caption}
+                  <div className="flex items-center justify-between px-3.5 py-2 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200">
+                    <span className="flex items-center gap-1.5 font-mono text-indigo-600 dark:text-indigo-400 font-bold truncate">
+                      <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+                      {displayLabel}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveZoomImage(img)}
+                      className="p-1 rounded text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                      title="Click to enlarge"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
-                )}
-              </div>
-            ))}
+                  <div
+                    onClick={() => setActiveZoomImage(img)}
+                    className={`flex-1 ${isRankingMode ? 'p-3 min-h-[160px] sm:min-h-[180px] max-h-[240px]' : 'p-2 min-h-[140px] max-h-[200px]'} bg-slate-100/60 dark:bg-slate-950/40 flex items-center justify-center cursor-pointer overflow-hidden group`}
+                  >
+                    <img
+                      src={img.url}
+                      alt={displayLabel}
+                      className={`${isRankingMode ? 'max-h-[210px]' : 'max-h-[180px]'} w-auto max-w-full object-contain rounded transition-transform duration-200 group-hover:scale-[1.02]`}
+                      loading="lazy"
+                    />
+                  </div>
+                  {img.caption && (
+                    <div className="px-3.5 py-2 text-[11px] sm:text-xs text-slate-600 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
+                      {img.caption}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
