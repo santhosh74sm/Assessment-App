@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import confetti from 'canvas-confetti';
-import { Check, ArrowUp, ArrowDown, GripVertical, ListOrdered, Maximize2, X, Image as ImageIcon } from 'lucide-react';
+import { Check, ArrowUp, ArrowDown, GripVertical, Maximize2, X, Image as ImageIcon } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
 interface RankingStatementItem {
@@ -606,13 +606,6 @@ export function FlameMiniGameCanvas({
               <h3 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white mb-2 leading-relaxed text-balance">
                 {content}
               </h3>
-              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-xs text-indigo-800 dark:text-indigo-300 font-medium">
-                <ListOrdered className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                <span>
-                  Rank statements by priority: <strong>1 = Highest Priority</strong>,{' '}
-                  <strong>{rankingItems.length} = Lowest Priority</strong>.
-                </span>
-              </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">
                 Use drag-and-drop or the accessible Up/Down arrow buttons to adjust the order.
               </p>
@@ -673,18 +666,6 @@ export function FlameMiniGameCanvas({
                     <span className="text-sm sm:text-base font-medium text-slate-900 dark:text-slate-100 flex-1 min-w-0 break-words">
                       {item.text}
                     </span>
-
-                    {/* Priority label for top/bottom */}
-                    {rankNum === 1 && (
-                      <span className="hidden sm:inline-block text-[10px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 px-2 py-0.5 rounded shrink-0">
-                        Highest
-                      </span>
-                    )}
-                    {rankNum === rankingItems.length && rankingItems.length > 2 && (
-                      <span className="hidden sm:inline-block text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2 py-0.5 rounded shrink-0">
-                        Lowest
-                      </span>
-                    )}
 
                     {/* Up / Down Controls (Accessible & Mobile Friendly) */}
                     <div className="flex items-center gap-1 shrink-0">
