@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { Document } from 'mongoose';
+import type { QuestionAttemptLog, QuestionImage } from '../src/types.ts';
 
 // ==========================================
 // 1. USER SCHEMA & MODEL
@@ -171,15 +172,15 @@ export interface IQuestionDocument extends Document {
   timeSeconds?: number | null;
   points?: number | null;
   options: string[];
-  correctAnswer?: any;
+  correctAnswer?: unknown;
   correctAnswers?: string[];
   enableWrittenExplanation?: boolean;
   defaultInput?: boolean;
   scoringGuide?: string;
-  expectedResponse?: any;
-  images?: any[];
+  expectedResponse?: unknown;
+  images?: QuestionImage[];
   imageLayout?: 'single_top' | 'comparison' | 'options_grid' | 'auto';
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -268,7 +269,7 @@ export interface IPublishedTestDocument extends Document {
   endTime: string;
   shuffle: boolean;
   questionIds: string[];
-  questionsSnapshot?: any[];
+  questionsSnapshot?: QuestionAttemptLog[];
   randomCount?: number;
   createdBy?: string;
   status?: 'ACTIVE' | 'PAUSED';
@@ -366,7 +367,7 @@ export interface IStudentTestAssignmentDocument extends Document {
   correctCount: number;
   wrongCount: number;
   totalTimeTakenSeconds: number;
-  questions: any[];
+  questions: QuestionAttemptLog[];
   startedAt?: Date;
   completedAt?: Date;
   lockedAt?: Date;
@@ -465,9 +466,10 @@ export interface IPublishHistoryDocument extends Document {
     sections: string[];
   }>;
   publishMode: 'Selected Questions' | 'Random Questions';
+  shuffle?: boolean;
   assignedQuestionsCount: number;
   questionIds?: string[];
-  questionsSnapshot?: any[];
+  questionsSnapshot?: QuestionAttemptLog[];
   randomCount?: number;
   completedCount: number;
   incompleteCount: number;

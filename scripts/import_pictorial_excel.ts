@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import * as xlsx from 'xlsx';
+import ExcelJS from 'exceljs';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import { QuestionModel, QuestionGroupModel } from '../database/models.ts';
@@ -34,7 +34,7 @@ async function run() {
     process.exit(1);
   }
 
-  await mongoose.connect(MONGO_URI);
+  await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 });
   console.log(`Connected to MongoDB: ${MONGO_URI}`);
 
   // Fetch or create default pictorial question group
@@ -57,10 +57,45 @@ async function run() {
   }
 
   const fileBuffer = fs.readFileSync(resolvedPath);
-  const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-  const rows: any[] = xlsx.utils.sheet_to_json(sheet, { defval: '' });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(fileBuffer as any);
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+    console.error(`Error: Workbook "${resolvedPath}" contains no worksheets.`);
+    process.exit(1);
+  }
+  const sheetName = worksheet.name || 'Sheet1';
+
+  const headerRow = worksheet.getRow(1);
+  const headers: string[] = [];
+  headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+    const val = cell.value;
+    headers[colNumber] = typeof val === 'string' ? val.trim() : (val != null ? String(val).trim() : '');
+  });
+
+  const rows: any[] = [];
+  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const rowObj: Record<string, any> = {};
+    let hasAnyVal = false;
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      const header = headers[colNumber];
+      if (header) {
+        let cellVal = cell.value;
+        if (cellVal && typeof cellVal === 'object') {
+          if ('text' in cellVal) cellVal = (cellVal as any).text;
+          else if ('result' in cellVal) cellVal = (cellVal as any).result;
+          else if ('richText' in cellVal && Array.isArray((cellVal as any).richText)) {
+            cellVal = (cellVal as any).richText.map((rt: any) => rt.text || '').join('');
+          }
+        }
+        const str = cellVal != null ? String(cellVal).trim() : '';
+        if (str !== '') hasAnyVal = true;
+        rowObj[header] = str;
+      }
+    });
+    if (hasAnyVal) rows.push(rowObj);
+  });
 
   console.log(`Loaded sheet "${sheetName}" with ${rows.length} row(s).`);
 

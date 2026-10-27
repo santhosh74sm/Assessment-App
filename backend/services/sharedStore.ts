@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+import Redis, { type RedisOptions } from 'ioredis';
 import jwt from 'jsonwebtoken';
 import dns from 'dns';
 import { URL } from 'url';
@@ -179,11 +179,11 @@ class SharedStore {
     redisHost?: string,
     redisPort?: number,
     redisPassword?: string,
-    redisOptions?: any
+    redisOptions?: RedisOptions
   ): void {
     try {
       if (redisUrl) {
-        this.subscriberClient = new Redis(redisUrl, redisOptions);
+        this.subscriberClient = new Redis(redisUrl, redisOptions ?? {});
       } else if (redisHost) {
         this.subscriberClient = new Redis({
           host: redisHost,

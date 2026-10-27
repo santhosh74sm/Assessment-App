@@ -54,6 +54,46 @@ export interface QuestionImage {
 
 export type QuestionImageLayout = 'single_top' | 'comparison' | 'options_grid' | 'auto';
 
+export type StudentAnswerValue =
+  | string
+  | number
+  | boolean
+  | Array<string | Record<string, unknown>>
+  | null
+  | undefined;
+
+export interface ScorableQuestionLike {
+  questionId?: string;
+  id?: string;
+  _id?: unknown;
+  groupId?: string;
+  groupName?: string;
+  difficulty?: QuestionDifficulty;
+  questionType?: string;
+  answerType?: AnswerType | 'single' | 'multiple' | string;
+  isRanking?: boolean;
+  isRankingQuestion?: boolean;
+  content?: string;
+  options?: string[];
+  correctAnswer?: unknown;
+  correctAnswers?: string[];
+  enableWrittenExplanation?: boolean;
+  defaultInput?: boolean;
+  scoringGuide?: string;
+  expectedResponse?: unknown;
+  points?: number | null;
+  timeAllowedSeconds?: number | null;
+  timeSeconds?: number | null;
+  writtenExplanation?: string;
+  studentAnswer?: StudentAnswerValue;
+  metadata?: {
+    expectedOrder?: unknown;
+    expectedResponse?: unknown;
+    pairs?: unknown;
+    [key: string]: unknown;
+  };
+}
+
 export interface Question {
   id: string;
   groupId: string;
@@ -67,15 +107,15 @@ export interface Question {
   timeSeconds?: number | null;
   points?: number | null;
   options?: string[];
-  correctAnswer?: any; // string, number, or record of match pairs
+  correctAnswer?: unknown; // string, number, or record of match pairs
   correctAnswers?: string[];
   enableWrittenExplanation?: boolean;
   defaultInput?: boolean;
   scoringGuide?: string;
-  expectedResponse?: any;
+  expectedResponse?: unknown;
   images?: QuestionImage[];
   imageLayout?: QuestionImageLayout;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -120,6 +160,8 @@ export type TestAttemptStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'I
 export type ExitType = 'EXIT' | 'LOGOUT' | null;
 
 export interface QuestionAttemptLog {
+  id?: string;
+  _id?: unknown;
   questionId: string;
   groupName: string;
   difficulty: QuestionDifficulty;
@@ -129,11 +171,11 @@ export interface QuestionAttemptLog {
   isRankingQuestion?: boolean;
   content: string;
   points?: number | null;
-  studentAnswer: any;
+  studentAnswer: StudentAnswerValue;
   writtenExplanation?: string;
   enableWrittenExplanation?: boolean;
   defaultInput?: boolean;
-  correctAnswer?: any;
+  correctAnswer?: unknown;
   correctAnswers?: string[];
   isCorrect?: boolean;
   timeAllowedSeconds?: number | null;
@@ -145,11 +187,11 @@ export interface QuestionAttemptLog {
   assessedBy?: string;
   assessedAt?: string;
   scoringGuide?: string;
-  expectedResponse?: any;
+  expectedResponse?: unknown;
   options?: string[];
   images?: QuestionImage[];
   imageLayout?: QuestionImageLayout;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface StudentTestAssignment {
@@ -208,6 +250,7 @@ export interface PublishHistoryRecord {
     studentId: string;
     studentName: string;
     assessmentName?: string;
+    schoolName?: string;
     className: string;
     section: string;
     status: TestAttemptStatus;

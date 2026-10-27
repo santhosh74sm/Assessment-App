@@ -5,8 +5,9 @@ import { createServer as createViteServer } from 'vite';
 import routes from './backend/routes.ts';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { connectMongoDB, getMongoConnectionInfo } from './backend/database.ts';
-import { getJwtSecret } from './backend/middleware/auth.ts';
+import { getJwtSecret, parseCookies } from './backend/middleware/auth.ts';
 
 async function startServer() {
   const app = express();
@@ -55,16 +56,42 @@ async function startServer() {
     console.warn('[System] Warning initializing JWT secret:', err.message);
   }
 
-  // SEC-MED-05: HTTP Security Headers Middleware
-  app.use((_req, res, next) => {
+  // SEC-MED-05 & SEC-05: HTTP Security Headers Middleware & Hardened CSP
+  app.use((req, res, next) => {
+    const nonce = crypto.randomBytes(16).toString('base64');
+    res.locals.nonce = nonce;
+
+    // Parse incoming cookies into req.cookies
+    if (!req.cookies) {
+      req.cookies = parseCookies(req.headers.cookie);
+    }
+
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     res.setHeader('X-XSS-Protection', '1; mode=block');
-    res.setHeader(
-      'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' ws: wss:; frame-ancestors 'self' https://*.google.com https://*.run.app;"
-    );
+
+    // Hardened CSP: No unsafe-eval, no raw unsafe-inline for scripts (nonce-guarded), strict base-uri and object-src
+    const cspDirectives = [
+      "default-src 'self'",
+      `script-src 'self' 'nonce-${nonce}'`,
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com data:",
+      "img-src 'self' data: blob: https:",
+      "connect-src 'self' ws: wss:",
+      "frame-ancestors 'self' https://*.google.com https://*.run.app",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join('; ');
+
+    const isCspReportOnly = process.env.CSP_REPORT_ONLY === 'true';
+    if (isCspReportOnly) {
+      res.setHeader('Content-Security-Policy-Report-Only', cspDirectives);
+    } else {
+      res.setHeader('Content-Security-Policy', cspDirectives);
+    }
+
     next();
   });
 

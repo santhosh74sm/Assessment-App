@@ -151,14 +151,19 @@ export default function App() {
   );
 }
 
+function getCsrfToken(): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie.match(/(?:^|;\s*)puzzles_csrf_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function AppContent() {
   const { theme, setTheme } = useTheme();
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('puzzles_token'));
-  const [currentUser, setCurrentUser] = useState<any | null>(() => {
-    const saved = localStorage.getItem('puzzles_user');
-    return saved ? JSON.parse(saved) : null;
-  });
+  // SEC-05: In-memory token only (never persisted to localStorage)
+  const [token, setToken] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<any | null>(null);
+  const [isSessionChecking, setIsSessionChecking] = useState(true);
 
   // Track browser history changes to handle back/forward navigation accurately
   useEffect(() => {
@@ -203,24 +208,50 @@ function AppContent() {
       .finally(() => setCheckingSetup(false));
   }, []);
 
-  // Sync latest user profile on mount if token exists
+  // SEC-05: Restore session on initial load via HttpOnly cookie and handle refresh
   useEffect(() => {
-    if (token) {
-      fetch('/api/auth/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((fresh) => {
-          if (fresh) {
-            setCurrentUser(fresh);
-            try {
-              localStorage.setItem('puzzles_user', JSON.stringify(fresh));
-            } catch (_) {}
+    // Purge any legacy localStorage token
+    try {
+      localStorage.removeItem('puzzles_token');
+    } catch (_) {}
+
+    // Verify session via secure HttpOnly cookie
+    fetch('/api/auth/me', { credentials: 'same-origin' })
+      .then(async (res) => {
+        if (res.ok) {
+          const fresh = await res.json();
+          setCurrentUser(fresh);
+          if (fresh.token) setToken(fresh.token);
+        } else if (res.status === 401) {
+          // Attempt automatic access-token refresh via HttpOnly refresh cookie
+          try {
+            const refreshRes = await fetch('/api/auth/refresh', {
+              method: 'POST',
+              credentials: 'same-origin',
+            });
+            if (refreshRes.ok) {
+              const refreshData = await refreshRes.json();
+              setCurrentUser(refreshData.user);
+              if (refreshData.token) setToken(refreshData.token);
+            } else {
+              setCurrentUser(null);
+              setToken(null);
+            }
+          } catch (_) {
+            setCurrentUser(null);
+            setToken(null);
           }
-        })
-        .catch((err) => console.error('Failed to sync current user profile:', err));
-    }
-  }, [token]);
+        } else {
+          setCurrentUser(null);
+          setToken(null);
+        }
+      })
+      .catch(() => {
+        setCurrentUser(null);
+        setToken(null);
+      })
+      .finally(() => setIsSessionChecking(false));
+  }, []);
 
   const handleLoginOrSetup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -231,6 +262,7 @@ function AppContent() {
       const endpoint = setupMode ? '/api/auth/setup-first-admin' : '/api/auth/login';
       const res = await fetch(endpoint, {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
@@ -240,10 +272,13 @@ function AppContent() {
         throw new Error(data.error || 'Username or password is incorrect.');
       }
 
+      // SEC-05: In-memory session state only
       setToken(data.token);
       setCurrentUser(data.user);
-      localStorage.setItem('puzzles_token', data.token);
-      localStorage.setItem('puzzles_user', JSON.stringify(data.user));
+      try {
+        localStorage.removeItem('puzzles_token');
+        localStorage.setItem('puzzles_user', JSON.stringify(data.user));
+      } catch (_) {}
 
       // Reset login form fields completely
       setUsername('');
@@ -283,6 +318,7 @@ function AppContent() {
     try {
       const res = await fetch('/api/auth/forgot-password', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: trimmed }),
       });
@@ -302,32 +338,36 @@ function AppContent() {
   };
 
   const handleLogout = async () => {
-    if (token) {
-      try {
-        if (currentUser?.role === 'student') {
-          await fetch('/api/student/logout', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-          });
-        }
-        await fetch('/api/auth/logout', {
+    const csrfToken = getCsrfToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    try {
+      if (currentUser?.role === 'student') {
+        await fetch('/api/student/logout', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
+          credentials: 'same-origin',
+          headers,
         });
-      } catch (e) {
-        console.error('Logout error', e);
       }
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers,
+      });
+    } catch (e) {
+      console.error('Logout error', e);
     }
+
     setToken(null);
     setCurrentUser(null);
-    localStorage.removeItem('puzzles_token');
-    localStorage.removeItem('puzzles_user');
+    try {
+      localStorage.removeItem('puzzles_token');
+      localStorage.removeItem('puzzles_user');
+    } catch (_) {}
 
     // Fully reset and clear login form state after logout
     setUsername('');
@@ -341,7 +381,9 @@ function AppContent() {
     if (currentUser) {
       const updated = { ...currentUser, mustChangePassword: false };
       setCurrentUser(updated);
-      localStorage.setItem('puzzles_user', JSON.stringify(updated));
+      try {
+        localStorage.setItem('puzzles_user', JSON.stringify(updated));
+      } catch (_) {}
     }
   };
 
@@ -351,8 +393,13 @@ function AppContent() {
     return <NotFoundView onNavigateHome={handleNavigateHome} />;
   }
 
+  // Initial session check loading state
+  if (isSessionChecking && !currentUser) {
+    return <DashboardLoadingFallback />;
+  }
+
   // If user is authenticated
-  if (token && currentUser) {
+  if (currentUser) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans">
         <Suspense fallback={<DashboardLoadingFallback />}>
@@ -360,13 +407,14 @@ function AppContent() {
           {currentUser.mustChangePassword && (
             <ForcePasswordModal
               username={currentUser.username}
+              token={token}
               onSuccess={handlePasswordChangeComplete}
             />
           )}
 
           {/* Role-based dashboard */}
           {currentUser.role === 'super_admin' && (
-            <SuperAdminDashboard token={token} currentUser={currentUser} onLogout={handleLogout} />
+            <SuperAdminDashboard token={token || ''} currentUser={currentUser} onLogout={handleLogout} />
           )}
 
           {currentUser.role === 'school_admin' && (
@@ -374,7 +422,7 @@ function AppContent() {
           )}
 
           {currentUser.role === 'student' && (
-            <StudentPortal token={token} user={currentUser} onLogout={handleLogout} />
+            <StudentPortal token={token || ''} user={currentUser} onLogout={handleLogout} />
           )}
         </Suspense>
       </div>

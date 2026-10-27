@@ -11,9 +11,27 @@ import {
   PublishedTestModel,
   StudentTestAssignmentModel,
   PublishHistoryModel,
+  type IPublishHistoryDocument,
   AssessmentTemplateModel,
 } from '../database/models.ts';
-import { generateToken, authenticate, requireRole, revokeToken } from './middleware/auth.ts';
+import jwt from 'jsonwebtoken';
+import {
+  generateToken,
+  generateAccessToken,
+  generateRefreshToken,
+  generateCsrfToken,
+  setAuthCookies,
+  clearAuthCookies,
+  parseCookies,
+  authenticate,
+  verifyCsrfToken,
+  requireRole,
+  revokeToken,
+  AUTH_COOKIE_NAMES,
+  getJwtSecret,
+  type AuthUserPayload,
+} from './middleware/auth.ts';
+import { sharedStore } from './services/sharedStore.ts';
 import { createRateLimiter } from './middleware/rateLimiter.ts';
 import {
   computeStudentInsights,
@@ -22,12 +40,20 @@ import {
 import { hasAutomaticallyScorableAnswer } from './services/questionScoring.ts';
 import { serializeQuestionForRole, serializeStudentQuestion } from './services/studentQuestionSerializer.ts';
 import multer from 'multer';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { s3Service } from './services/s3Service.ts';
-import type { Question, QuestionAttemptLog } from './types.ts';
+import type { PublishHistoryRecord, Question, QuestionAttemptLog, School, ScorableQuestionLike, StudentAnswerValue, User } from './types.ts';
 import { to12Hour, to24Hour, toISODate, isScheduledForFuture, isAssessmentExpired } from '../src/utils/dateTime.ts';
 
 const router = express.Router();
+
+// Ensure cookies are parsed on incoming router requests
+router.use((req, _res, next) => {
+  if (!req.cookies) {
+    req.cookies = parseCookies(req.headers.cookie);
+  }
+  next();
+});
 
 // File upload configuration for AWS S3 image storage (SEC-MED-05: strict MIME and size controls)
 const uploadImage = multer({
@@ -45,7 +71,7 @@ const uploadImage = multer({
 
 // Middleware wrappers that capture Multer errors and return clean JSON
 const handleSingleImageUpload = (req: Request, res: Response, next: NextFunction) => {
-  uploadImage.single('image')(req, res, (err: any) => {
+  uploadImage.single('image')(req, res, (err: unknown) => {
     if (err) {
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
@@ -53,14 +79,15 @@ const handleSingleImageUpload = (req: Request, res: Response, next: NextFunction
         }
         return res.status(400).json({ error: `Upload error: ${err.message}` });
       }
-      return res.status(400).json({ error: err.message || 'Image upload failed' });
+      const message = err instanceof Error ? err.message : String(err);
+      return res.status(400).json({ error: message || 'Image upload failed' });
     }
     next();
   });
 };
 
 const handleMultipleImagesUpload = (req: Request, res: Response, next: NextFunction) => {
-  uploadImage.array('images', 10)(req, res, (err: any) => {
+  uploadImage.array('images', 10)(req, res, (err: unknown) => {
     if (err) {
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
@@ -71,7 +98,8 @@ const handleMultipleImagesUpload = (req: Request, res: Response, next: NextFunct
         }
         return res.status(400).json({ error: `Upload error: ${err.message}` });
       }
-      return res.status(400).json({ error: err.message || 'Image upload failed' });
+      const message = err instanceof Error ? err.message : String(err);
+      return res.status(400).json({ error: message || 'Image upload failed' });
     }
     next();
   });
@@ -82,10 +110,15 @@ const uploadExcel = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max for Excel import
 });
 
-function canonicalizeRequestValue(value: any): any {
+function canonicalizeRequestValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalizeRequestValue);
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalizeRequestValue(value[key])]));
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .sort()
+        .map((key) => [key, canonicalizeRequestValue(record[key])])
+    );
   }
   return value;
 }
@@ -97,11 +130,11 @@ async function getStudentAccessibleAssignments(req: Request) {
     studentId,
     status: { $in: ['NOT_STARTED', 'IN_PROGRESS'] },
   });
-  const publishIds = Array.from(new Set(assignments.map((a: any) => String(a.publishedTestId))));
+  const publishIds = Array.from(new Set(assignments.map((a) => String(a.publishedTestId))));
   const publishedTests = publishIds.length
     ? await PublishedTestModel.find({ _id: { $in: publishIds } })
     : [];
-  const publishById = new Map(publishedTests.map((p: any) => [String(p._id), p]));
+  const publishById = new Map(publishedTests.map((p) => [String(p._id), p]));
   const hasValidUserId = Boolean(req.user!.userId && mongoose.isValidObjectId(req.user!.userId));
   const escapedStudentId = escapeRegExp(studentId);
   const student = (hasValidUserId ? await UserModel.findById(req.user!.userId).lean() : null) ||
@@ -114,7 +147,7 @@ async function getStudentAccessibleAssignments(req: Request) {
   if (!student) return [];
 
   const now = getServerAuthoritativeDateTimeStr(req);
-  return assignments.filter((assignment: any) => {
+  return assignments.filter((assignment) => {
     const pub = publishById.get(String(assignment.publishedTestId));
     if (!pub || pub.isPaused || pub.status === 'PAUSED') return false;
     if (assignment.status === 'NOT_STARTED' && !isStudentTargetedByPublishedTest(student, pub)) return false;
@@ -170,20 +203,31 @@ const answerRateLimiter = createRateLimiter({
 });
 
 
+export interface FormattableDoc {
+  toObject?: (options?: unknown) => Record<string, unknown>;
+  _id?: unknown;
+  id?: string;
+  __v?: unknown;
+  passwordHash?: unknown;
+  [key: string]: unknown;
+}
+
 // Helper to convert Mongoose documents to clean JSON with 'id'
-function formatDoc(doc: any): any {
-  if (!doc) return null;
-  const obj = doc.toObject ? doc.toObject({ transform: true }) : { ...doc };
+function formatDoc<T = any>(doc: FormattableDoc | null | undefined | unknown): T {
+  if (!doc || typeof doc !== 'object') return null as unknown as T;
+  const d = doc as FormattableDoc;
+  const obj: Record<string, unknown> = typeof d.toObject === 'function' ? d.toObject({ transform: true }) : { ...(d as Record<string, unknown>) };
   if (obj._id && !obj.id) {
-    obj.id = obj._id.toString();
+    obj.id = String(obj._id);
   }
   delete obj.__v;
   delete obj.passwordHash;
-  return obj;
+  return obj as unknown as T;
 }
 
-function formatDocs(docs: any[]): any[] {
-  return docs.map(formatDoc);
+function formatDocs<T = any>(docs: unknown): T[] {
+  if (!Array.isArray(docs)) return [];
+  return docs.map((d) => formatDoc<T>(d)).filter((item): item is T => Boolean(item));
 }
 
 // Helper to escape regex special characters (SEC-HIGH-02: Prevent ReDoS)
@@ -224,8 +268,14 @@ function getServerAuthoritativeDateTimeStr(req?: Request): string {
   return `${year}-${month}-${day}T${hour}:${min}`;
 }
 
+export interface ExpiringAssessmentLike {
+  endDate?: string;
+  endTime?: string;
+  [key: string]: unknown;
+}
+
 // SEC-CRIT-04: Authoritative check to determine if an assessment has expired
-function isRequestAssessmentExpired(req: Request, pubTest: any): boolean {
+function isRequestAssessmentExpired(req: Request, pubTest: ExpiringAssessmentLike | null | undefined): boolean {
   if (!pubTest?.endDate || pubTest.endDate === 'Open') {
     return false;
   }
@@ -273,15 +323,22 @@ router.post('/auth/setup-first-admin', async (req: Request, res: Response) => {
       mustChangePassword: false,
     });
 
-    const token = generateToken({
+    const userPayload = {
       userId: firstSuperAdmin._id.toString(),
       username: firstSuperAdmin.username,
       role: firstSuperAdmin.role,
-    });
+    };
+
+    const { token: accessToken } = generateAccessToken(userPayload);
+    const { token: refreshToken } = generateRefreshToken(userPayload);
+    const csrfToken = generateCsrfToken();
+
+    setAuthCookies(res, accessToken, refreshToken, csrfToken);
 
     return res.status(201).json({
       message: 'First Super Admin initialized successfully for production.',
-      token,
+      token: accessToken,
+      csrfToken,
       user: {
         id: firstSuperAdmin._id.toString(),
         username: firstSuperAdmin.username,
@@ -337,17 +394,24 @@ router.post('/auth/login', loginRateLimiter, async (req: Request, res: Response)
       return res.status(401).json({ error: 'Username or password is incorrect.' });
     }
 
-    const token = generateToken({
+    const userPayload = {
       userId: user._id.toString(),
       username: user.username,
       role: user.role,
       schoolId: user.schoolId,
       schoolName: user.schoolName,
       studentId: user.uniqueStudentId,
-    });
+    };
+
+    const { token: accessToken } = generateAccessToken(userPayload);
+    const { token: refreshToken } = generateRefreshToken(userPayload);
+    const csrfToken = generateCsrfToken();
+
+    setAuthCookies(res, accessToken, refreshToken, csrfToken);
 
     return res.json({
-      token,
+      token: accessToken,
+      csrfToken,
       user: {
         id: user._id.toString(),
         username: user.username,
@@ -368,15 +432,116 @@ router.post('/auth/login', loginRateLimiter, async (req: Request, res: Response)
   }
 });
 
-// SEC-MED-04: User Logout & Token Revocation
+// SEC-05: Refresh Access Token & Rotate Refresh Token with Replay Protection
+router.post('/auth/refresh', async (req: Request, res: Response) => {
+  try {
+    if (!req.cookies) {
+      req.cookies = parseCookies(req.headers.cookie);
+    }
+
+    const refreshToken = req.cookies?.[AUTH_COOKIE_NAMES.REFRESH_TOKEN] || req.body?.refreshToken;
+    if (!refreshToken || typeof refreshToken !== 'string') {
+      return res.status(401).json({ error: 'Refresh token missing. Please sign in again.' });
+    }
+
+    // Verify token signature & expiry
+    let decoded: (jwt.JwtPayload & AuthUserPayload) | null = null;
+    try {
+      const verified = jwt.verify(refreshToken, getJwtSecret());
+      if (verified && typeof verified === 'object') {
+        decoded = verified as jwt.JwtPayload & AuthUserPayload;
+      }
+    } catch (err: unknown) {
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'Refresh token expired or invalid. Please sign in again.' });
+    }
+
+    if (!decoded || decoded.type !== 'refresh' || !decoded.jti || !decoded.userId) {
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'Invalid refresh token format.' });
+    }
+
+    // Check for revocation or REPLAY attack
+    const isRevoked = await sharedStore.isTokenRevoked(decoded.jti);
+    if (isRevoked) {
+      // Replay attack detected! Invalidate any active session for safety
+      console.warn(`[Security Alert] Replayed or revoked refresh token detected for user: ${decoded.username} (${decoded.userId}). Revoking sessions.`);
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'Refresh token has already been used or revoked. Please sign in again.' });
+    }
+
+    // Find user to verify account is still active and valid
+    const user = await UserModel.findById(decoded.userId);
+    if (!user) {
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'User account not found.' });
+    }
+
+    // Rotate tokens:
+    // 1. Invalidate old refresh token jti
+    await sharedStore.revokeToken(decoded.jti);
+
+    // 2. Generate fresh tokens
+    const userPayload = {
+      userId: user._id.toString(),
+      username: user.username,
+      role: user.role,
+      schoolId: user.schoolId,
+      schoolName: user.schoolName,
+      studentId: user.uniqueStudentId,
+    };
+
+    const { token: newAccessToken } = generateAccessToken(userPayload);
+    const { token: newRefreshToken } = generateRefreshToken(userPayload);
+    const newCsrfToken = generateCsrfToken();
+
+    setAuthCookies(res, newAccessToken, newRefreshToken, newCsrfToken);
+
+    return res.json({
+      success: true,
+      token: newAccessToken,
+      csrfToken: newCsrfToken,
+      user: {
+        id: user._id.toString(),
+        username: user.username,
+        role: user.role,
+        mustChangePassword: user.mustChangePassword,
+        schoolId: user.schoolId,
+        schoolName: user.schoolName,
+        studentName: user.studentName,
+        className: user.className,
+        section: user.section,
+        schoolAdmissionNumber: user.schoolAdmissionNumber,
+        uniqueStudentId: user.uniqueStudentId,
+      },
+    });
+  } catch (err: any) {
+    console.error('[Auth Refresh Error]:', err.message || err);
+    clearAuthCookies(res);
+    return res.status(500).json({ error: 'Failed to refresh authentication session.' });
+  }
+});
+
+// SEC-MED-04 & SEC-05: User Logout & Token Revocation
 router.post('/auth/logout', authenticate, async (req: Request, res: Response) => {
   try {
     if (req.token) {
       revokeToken(req.token);
     }
+    const refreshToken = req.cookies?.[AUTH_COOKIE_NAMES.REFRESH_TOKEN];
+    if (refreshToken) {
+      try {
+        const decoded = jwt.decode(refreshToken) as any;
+        if (decoded?.jti) {
+          revokeToken(decoded.jti);
+        }
+      } catch (_) {}
+    }
+    clearAuthCookies(res);
     return res.json({ success: true, message: 'Logged out successfully' });
   } catch (err: any) {
     console.error('[Auth Logout Error]:', err.message || err);
+    clearAuthCookies(res);
     return res.status(500).json({ error: 'Failed to process logout' });
   }
 });
@@ -464,6 +629,19 @@ router.get('/auth/me', authenticate, async (req: Request, res: Response) => {
     const user = await UserModel.findById(req.user!.userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+    // Ensure CSRF token is present or refresh cookie if needed
+    let csrfToken = req.cookies?.[AUTH_COOKIE_NAMES.CSRF_TOKEN];
+    if (!csrfToken) {
+      csrfToken = generateCsrfToken();
+      res.cookie(AUTH_COOKIE_NAMES.CSRF_TOKEN, csrfToken, {
+        httpOnly: false,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+    }
+
     return res.json({
       id: user._id.toString(),
       username: user.username,
@@ -476,6 +654,7 @@ router.get('/auth/me', authenticate, async (req: Request, res: Response) => {
       section: user.section,
       schoolAdmissionNumber: user.schoolAdmissionNumber,
       uniqueStudentId: user.uniqueStudentId,
+      csrfToken,
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to get user profile' });
@@ -517,7 +696,7 @@ router.get('/schools', authenticate, async (req: Request, res: Response) => {
     const user = req.user!;
     if (user.role === 'super_admin') {
       const schools = await SchoolModel.find();
-      const sorted = formatDocs(schools).sort((a: any, b: any) =>
+      const sorted = formatDocs<School>(schools).sort((a, b) =>
         (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
       );
       return res.json(sorted);
@@ -860,7 +1039,7 @@ router.get('/students', authenticate, async (req: Request, res: Response) => {
       search?: string;
     };
 
-    const query: any = { role: 'student' };
+    const query: Record<string, unknown> = { role: 'student' };
 
     // Enforce access control
     if (req.user!.role === 'student') {
@@ -893,7 +1072,7 @@ router.get('/students', authenticate, async (req: Request, res: Response) => {
     }
 
     const list = await UserModel.find(query, { passwordHash: 0 });
-    const sorted = formatDocs(list).sort((a: any, b: any) =>
+    const sorted = formatDocs<User>(list).sort((a, b) =>
       (a.studentName || '').localeCompare(b.studentName || '', undefined, { numeric: true, sensitivity: 'base' })
     );
     return res.json(sorted);
@@ -1179,23 +1358,23 @@ router.get('/question-groups', authenticate, async (req: Request, res: Response)
   try {
     if (req.user!.role === 'student') {
       const assignments = await getStudentAccessibleAssignments(req);
-      const assignedQuestions = assignments.flatMap((a: any) => a.questions || []);
+      const assignedQuestions = assignments.flatMap((a) => a.questions || []);
       const groups = await QuestionGroupModel.find().sort({ createdAt: 1 });
-      const assignedGroupKeys = new Set(assignedQuestions.flatMap((q: any) => [
+      const assignedGroupKeys = new Set(assignedQuestions.flatMap((q) => [
         String(q.groupId || '').trim(),
         String(q.groupName || '').trim().toLowerCase(),
       ]).filter(Boolean));
-      const visibleGroups = groups.filter((g: any) =>
+      const visibleGroups = groups.filter((g) =>
         assignedGroupKeys.has(String(g._id)) || assignedGroupKeys.has(String(g.name || '').trim().toLowerCase())
       );
-      return res.json(visibleGroups.map((g: any) => {
-        const groupQuestions = assignedQuestions.filter((q: any) =>
+      return res.json(visibleGroups.map((g) => {
+        const groupQuestions = assignedQuestions.filter((q) =>
           String(q.groupId || '').trim() === String(g._id) ||
           String(q.groupName || '').trim().toLowerCase() === String(g.name || '').trim().toLowerCase()
         );
         const byDifficulty = (difficulty: string) => groupQuestions
-          .filter((q: any) => String(q.difficulty || '').trim().toLowerCase() === difficulty.toLowerCase())
-          .map((q: any) => serializeStudentQuestion(q));
+          .filter((q) => String(q.difficulty || '').trim().toLowerCase() === difficulty.toLowerCase())
+          .map((q) => serializeStudentQuestion(q));
         const easy = byDifficulty('Easy');
         const medium = byDifficulty('Medium');
         const hard = byDifficulty('Hard');
@@ -1214,8 +1393,8 @@ router.get('/question-groups', authenticate, async (req: Request, res: Response)
 
     const groups = await QuestionGroupModel.find().sort({ createdAt: 1 });
     const questions = await QuestionModel.find();
-    const formatQuestionsList = (qList: any[]) => {
-      return qList.map((q) => serializeQuestionForRole(q, req.user?.role));
+    const formatQuestionsList = (qList: unknown[]) => {
+      return qList.map((q) => serializeQuestionForRole(q as ScorableQuestionLike, req.user?.role));
     };
 
     const withCounts = groups.map((g) => {
@@ -1505,7 +1684,7 @@ router.delete('/question-groups/:id', authenticate, requireRole('super_admin'), 
       for (const assign of matchingAssignments) {
         if (Array.isArray(assign.questions)) {
           const originalCount = assign.questions.length;
-          assign.questions = assign.questions.filter((q: any) => {
+          assign.questions = assign.questions.filter((q: QuestionAttemptLog) => {
             const qId = String(q.questionId || q.id || q._id || '');
             return !deletedIdSet.has(qId);
           });
@@ -1529,12 +1708,12 @@ router.delete('/question-groups/:id', authenticate, requireRole('super_admin'), 
         let modified = false;
         if (Array.isArray(pt.questionIds)) {
           const origLen = pt.questionIds.length;
-          pt.questionIds = pt.questionIds.filter((qId: any) => !deletedIdSet.has(String(qId)));
+          pt.questionIds = pt.questionIds.filter((qId: string) => !deletedIdSet.has(String(qId)));
           if (pt.questionIds.length !== origLen) modified = true;
         }
         if (Array.isArray(pt.questionsSnapshot)) {
           const origLen = pt.questionsSnapshot.length;
-          pt.questionsSnapshot = pt.questionsSnapshot.filter((q: any) => {
+          pt.questionsSnapshot = pt.questionsSnapshot.filter((q: QuestionAttemptLog) => {
             const qId = String(q.id || q._id || q.questionId || '');
             return !deletedIdSet.has(qId);
           });
@@ -1559,12 +1738,12 @@ router.delete('/question-groups/:id', authenticate, requireRole('super_admin'), 
         let modified = false;
         if (Array.isArray(ph.questionIds)) {
           const origLen = ph.questionIds.length;
-          ph.questionIds = ph.questionIds.filter((qId: any) => !deletedIdSet.has(String(qId)));
+          ph.questionIds = ph.questionIds.filter((qId: string) => !deletedIdSet.has(String(qId)));
           if (ph.questionIds.length !== origLen) modified = true;
         }
         if (Array.isArray(ph.questionsSnapshot)) {
           const origLen = ph.questionsSnapshot.length;
-          ph.questionsSnapshot = ph.questionsSnapshot.filter((q: any) => {
+          ph.questionsSnapshot = ph.questionsSnapshot.filter((q: QuestionAttemptLog) => {
             const qId = String(q.id || q._id || q.questionId || '');
             return !deletedIdSet.has(qId);
           });
@@ -1590,7 +1769,7 @@ router.delete('/question-groups/:id', authenticate, requireRole('super_admin'), 
 });
 
 // Helpers for Single / Multiple selection answer parsing and evaluation
-function parseMultipleCorrectAnswers(raw: any, options?: string[]): string[] {
+function parseMultipleCorrectAnswers(raw: unknown, options?: string[] | string): string[] {
   if (Array.isArray(raw)) {
     return raw.map((s) => String(s).trim()).filter(Boolean);
   }
@@ -1652,7 +1831,10 @@ function normalizeToOptionValue(val: string, options?: string[]): string {
   return trimmed.toLowerCase();
 }
 
-function evaluateQuestionCorrectness(qItem: any, studentAnswer: any): boolean | undefined {
+function evaluateQuestionCorrectness(
+  qItem: ScorableQuestionLike,
+  studentAnswer: StudentAnswerValue
+): boolean | undefined {
   const hasCorrectAnswer = hasAutomaticallyScorableAnswer(qItem);
 
   if (!hasCorrectAnswer) return undefined;
@@ -1681,18 +1863,28 @@ function evaluateQuestionCorrectness(qItem: any, studentAnswer: any): boolean | 
 
     let studentOrder: string[] = [];
     if (Array.isArray(studentAnswer)) {
-      studentOrder = studentAnswer.map((item: any) =>
-        typeof item === 'string' ? item.trim() : String(item.text || item.id || '').trim()
-      ).filter(Boolean);
+      studentOrder = studentAnswer.map((item: unknown) => {
+        if (typeof item === 'string') return item.trim();
+        if (item && typeof item === 'object') {
+          const obj = item as { text?: unknown; id?: unknown };
+          return String(obj.text || obj.id || '').trim();
+        }
+        return String(item || '').trim();
+      }).filter(Boolean);
     } else if (typeof studentAnswer === 'string') {
       studentOrder = studentAnswer.split(',').map((s: string) => s.trim()).filter(Boolean);
     }
 
     let expectedOrder: string[] = [];
     if (Array.isArray(expected)) {
-      expectedOrder = expected.map((item: any) =>
-        typeof item === 'string' ? item.trim() : String(item.text || item.id || '').trim()
-      ).filter(Boolean);
+      expectedOrder = expected.map((item: unknown) => {
+        if (typeof item === 'string') return item.trim();
+        if (item && typeof item === 'object') {
+          const obj = item as { text?: unknown; id?: unknown };
+          return String(obj.text || obj.id || '').trim();
+        }
+        return String(item || '').trim();
+      }).filter(Boolean);
     } else if (typeof expected === 'string') {
       expectedOrder = expected.split(',').map((s: string) => s.trim()).filter(Boolean);
     }
@@ -1710,18 +1902,18 @@ function evaluateQuestionCorrectness(qItem: any, studentAnswer: any): boolean | 
   if (isMultiple) {
     let studentItems: string[] = [];
     if (Array.isArray(studentAnswer)) {
-      studentItems = studentAnswer.map((s: any) => String(s).trim()).filter(Boolean);
+      studentItems = studentAnswer.map((s: unknown) => String(s).trim()).filter(Boolean);
     } else if (typeof studentAnswer === 'string') {
-      studentItems = studentAnswer.split(',').map((s: any) => s.trim()).filter(Boolean);
+      studentItems = studentAnswer.split(',').map((s: string) => s.trim()).filter(Boolean);
     } else {
       studentItems = [String(studentAnswer).trim()].filter(Boolean);
     }
 
     let expectedItems: string[] = [];
     if (Array.isArray(qItem.correctAnswers) && qItem.correctAnswers.length > 0) {
-      expectedItems = qItem.correctAnswers.map((s: any) => String(s).trim()).filter(Boolean);
+      expectedItems = qItem.correctAnswers.map((s: unknown) => String(s).trim()).filter(Boolean);
     } else if (Array.isArray(qItem.correctAnswer) && qItem.correctAnswer.length > 0) {
-      expectedItems = qItem.correctAnswer.map((s: any) => String(s).trim()).filter(Boolean);
+      expectedItems = qItem.correctAnswer.map((s: unknown) => String(s).trim()).filter(Boolean);
     } else if (typeof qItem.correctAnswer === 'string' && qItem.correctAnswer.trim()) {
       expectedItems = parseMultipleCorrectAnswers(qItem.correctAnswer, options);
     } else if (qItem.correctAnswer != null) {
@@ -2539,14 +2731,65 @@ router.post(
         return res.status(400).json({ error: 'No Excel file data provided. Upload via "file" field or send "base64Data".' });
       }
 
-      const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-      const firstSheetName = workbook.SheetNames[0];
-      if (!firstSheetName) {
-        return res.status(400).json({ error: 'Excel workbook contains no sheets.' });
+      // Safe Excel parsing using ExcelJS (replaces vulnerable SheetJS / xlsx)
+      const workbook = new ExcelJS.Workbook();
+      try {
+        await workbook.xlsx.load(fileBuffer as any);
+      } catch (loadErr: any) {
+        return res.status(400).json({
+          error: 'Invalid or corrupted Excel file. Please upload a valid .xlsx file.',
+          details: loadErr.message || 'Failed to parse workbook',
+        });
       }
 
-      const worksheet = workbook.Sheets[firstSheetName];
-      const rawRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+      const worksheet = workbook.worksheets[0];
+      if (!worksheet || worksheet.rowCount < 2) {
+        return res.status(400).json({ error: 'The uploaded Excel sheet contains no data rows.' });
+      }
+
+      // Extract headers from Row 1
+      const headerRow = worksheet.getRow(1);
+      const headers: string[] = [];
+      headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        const val = cell.value;
+        headers[colNumber] = typeof val === 'string' ? val.trim() : (val != null ? String(val).trim() : '');
+      });
+
+      if (headers.filter(Boolean).length === 0) {
+        return res.status(400).json({ error: 'Excel worksheet does not contain valid column headers in row 1.' });
+      }
+
+      // Extract and normalize data rows
+      const rawRows: Array<Record<string, any>> = [];
+      worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+        if (rowNumber === 1) return; // Skip header row
+        const rowObj: Record<string, any> = {};
+        let hasAnyValue = false;
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          const header = headers[colNumber];
+          if (header) {
+            let cellValue = cell.value;
+            if (cellValue && typeof cellValue === 'object') {
+              if ('text' in cellValue) {
+                cellValue = (cellValue as any).text;
+              } else if ('result' in cellValue) {
+                cellValue = (cellValue as any).result;
+              } else if ('richText' in cellValue && Array.isArray((cellValue as any).richText)) {
+                cellValue = (cellValue as any).richText.map((rt: any) => rt.text || '').join('');
+              }
+            }
+            const strVal = cellValue != null ? String(cellValue).trim() : '';
+            if (strVal !== '') {
+              hasAnyValue = true;
+            }
+            rowObj[header] = strVal;
+          }
+        });
+
+        if (hasAnyValue) {
+          rawRows.push(rowObj);
+        }
+      });
 
       if (rawRows.length === 0) {
         return res.status(400).json({ error: 'The uploaded Excel sheet contains no data rows.' });
@@ -2589,6 +2832,12 @@ router.post(
         const questionText = getCol('Question Text', 'Question', 'Content', 'Problem', 'Question Content', 'Text');
         if (!questionText) {
           warnings.push(`Row ${rowNum}: Skipped because Question Text is empty.`);
+          skippedCount++;
+          continue;
+        }
+
+        if (questionText.length > 5000) {
+          warnings.push(`Row ${rowNum}: Skipped because Question Text exceeds maximum allowed length of 5000 characters.`);
           skippedCount++;
           continue;
         }
@@ -2637,6 +2886,7 @@ router.post(
         } else if (optionsListCol) {
           options = optionsListCol.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
         }
+        options = options.map((opt) => String(opt).trim().slice(0, 1000)).filter(Boolean).slice(0, 10);
 
         // Correct Answer
         const rawCorrect = getCol('Correct Answer', 'Answer', 'Key', 'Correct', 'Correct Option');
@@ -2665,10 +2915,12 @@ router.post(
 
         // Points & Time Limit
         const rawPoints = getCol('Points', 'Marks', 'Score');
-        const points = rawPoints ? Number(rawPoints) : 10;
+        const parsedPoints = Number(rawPoints);
+        const points = !isNaN(parsedPoints) && parsedPoints >= 0 && parsedPoints <= 1000 ? Math.round(parsedPoints) : 10;
 
         const rawTime = getCol('Time', 'Time Limit', 'Duration', 'Time Seconds');
-        const timeSeconds = rawTime ? Number(rawTime) : 45;
+        const parsedTime = Number(rawTime);
+        const timeSeconds = !isNaN(parsedTime) && parsedTime > 0 && parsedTime <= 7200 ? Math.round(parsedTime) : 45;
 
         // Written Explanation
         const rawExplanation = getCol('Enable Written Explanation', 'Written Explanation', 'Explanation');
@@ -2684,27 +2936,39 @@ router.post(
 
         // Image / Visual Prompts
         const rowImages: any[] = [];
+        const processImageField = (val: string, label: string, order: number) => {
+          if (!val) return;
+          if (val.startsWith('http://') || val.startsWith('https://') || val.startsWith('/')) {
+            rowImages.push({ id: `img_imp_${i}_${order}`, url: val, s3Key: '', label, order, role: 'question' });
+          } else {
+            const cleanKey = val.replace(/\\/g, '/').replace(/^\/+/, '');
+            if (s3Service.isSafeKey(cleanKey)) {
+              rowImages.push({
+                id: `img_imp_${i}_${order}`,
+                url: `/api/media/image/${encodeURIComponent(cleanKey)}`,
+                s3Key: cleanKey,
+                label,
+                order,
+                role: 'question',
+              });
+            } else {
+              warnings.push(`Row ${rowNum}: Ignored unsafe image path traversal reference "${val}".`);
+            }
+          }
+        };
+
         const mainImage = getCol('Image', 'Image Name', 'Main Image', 'Picture', 'Image URL');
-        if (mainImage) {
-          rowImages.push({
-            id: `img_imp_${i}_0`,
-            url: mainImage.startsWith('http') || mainImage.startsWith('/') ? mainImage : `/api/media/image/${encodeURIComponent(mainImage)}`,
-            s3Key: mainImage.startsWith('http') ? '' : mainImage,
-            label: 'Main Image',
-            order: 0,
-            role: 'question',
-          });
-        }
+        processImageField(mainImage, 'Main Image', 0);
 
         const picA = getCol('Picture A', 'Image A');
         const picB = getCol('Picture B', 'Image B');
         const picC = getCol('Picture C', 'Image C');
         const picD = getCol('Picture D', 'Image D');
 
-        if (picA) rowImages.push({ id: `img_imp_${i}_1`, url: picA, s3Key: picA, label: 'Picture A', order: 1, role: 'question' });
-        if (picB) rowImages.push({ id: `img_imp_${i}_2`, url: picB, s3Key: picB, label: 'Picture B', order: 2, role: 'question' });
-        if (picC) rowImages.push({ id: `img_imp_${i}_3`, url: picC, s3Key: picC, label: 'Picture C', order: 3, role: 'question' });
-        if (picD) rowImages.push({ id: `img_imp_${i}_4`, url: picD, s3Key: picD, label: 'Picture D', order: 4, role: 'question' });
+        processImageField(picA, 'Picture A', 1);
+        processImageField(picB, 'Picture B', 2);
+        processImageField(picC, 'Picture C', 3);
+        processImageField(picD, 'Picture D', 4);
 
         // Determine Layout
         let imageLayout: 'single_top' | 'comparison' | 'options_grid' | 'auto' = 'auto';
@@ -2737,6 +3001,15 @@ router.post(
         };
 
         parsedQuestions.push(questionPayload);
+      }
+
+      if (parsedQuestions.length === 0) {
+        return res.status(400).json({
+          error: 'No valid questions could be extracted from the Excel sheet.',
+          totalRows: rawRows.length,
+          skippedCount,
+          warnings,
+        });
       }
 
       if (isDryRun) {
@@ -2774,8 +3047,32 @@ router.post(
 // 5. PUBLISH ASSESSMENT & TARGET METADATA
 // ==========================================
 
+export interface RawTargetInput {
+  schoolId?: unknown;
+  schoolIds?: unknown;
+  schoolName?: unknown;
+  schoolNames?: unknown;
+  classes?: unknown;
+  className?: unknown;
+  sections?: unknown;
+  studentIds?: unknown;
+  isAllSchools?: boolean;
+  [key: string]: unknown;
+}
+
+export interface TargetStudentLean {
+  _id: unknown;
+  uniqueStudentId?: string;
+  studentName?: string;
+  schoolId?: string;
+  schoolName?: string;
+  className?: string;
+  section?: string;
+  username?: string;
+}
+
 // Helper to validate target configurations and detect duplicates/overlaps
-async function validatePublishTargets(rawTargets: any[]) {
+async function validatePublishTargets(rawTargets: RawTargetInput[] | unknown[]) {
   if (!Array.isArray(rawTargets) || rawTargets.length === 0) {
     return { valid: false, error: 'At least one target configuration is required.' };
   }
@@ -2790,13 +3087,13 @@ async function validatePublishTargets(rawTargets: any[]) {
   }> = [];
 
   for (let i = 0; i < rawTargets.length; i++) {
-    const t = rawTargets[i];
+    const t = (rawTargets[i] && typeof rawTargets[i] === 'object' ? rawTargets[i] : {}) as RawTargetInput;
     let sIds: string[] = [];
     if (Array.isArray(t.schoolIds) && t.schoolIds.length > 0) {
-      sIds = t.schoolIds.map((s: any) => String(s).trim()).filter(Boolean);
+      sIds = t.schoolIds.map((s: unknown) => String(s).trim()).filter(Boolean);
     } else if (t.schoolId) {
       sIds = Array.isArray(t.schoolId)
-        ? t.schoolId.map((s: any) => String(s).trim()).filter(Boolean)
+        ? t.schoolId.map((s: unknown) => String(s).trim()).filter(Boolean)
         : [String(t.schoolId).trim()].filter(Boolean);
     }
 
@@ -2806,12 +3103,12 @@ async function validatePublishTargets(rawTargets: any[]) {
 
     if (sIds.some((s) => s.toUpperCase() === 'ALL' || s.toUpperCase() === 'ALL_SCHOOLS')) {
       const allSchools = await SchoolModel.find({}, { _id: 1 });
-      sIds = allSchools.map((s: any) => s._id.toString());
+      sIds = allSchools.map((s) => s._id.toString());
     }
 
     let classList: string[] = [];
     if (Array.isArray(t.classes)) {
-      classList = t.classes.map((c: any) => String(c).trim()).filter(Boolean);
+      classList = t.classes.map((c: unknown) => String(c).trim()).filter(Boolean);
     } else if (typeof t.className === 'string') {
       classList = t.className
         .split(',')
@@ -2826,7 +3123,7 @@ async function validatePublishTargets(rawTargets: any[]) {
 
     let secList: string[] = [];
     if (Array.isArray(t.sections)) {
-      secList = Array.from(new Set(t.sections.map((s: any) => String(s).trim().toUpperCase()).filter(Boolean)));
+      secList = Array.from(new Set(t.sections.map((s: unknown) => String(s).trim().toUpperCase()).filter(Boolean)));
     }
 
     let studentIdList: string[] = [];
@@ -2834,7 +3131,7 @@ async function validatePublishTargets(rawTargets: any[]) {
       studentIdList = Array.from(
         new Set(
           t.studentIds
-            .map((s: any) => String(s).trim())
+            .map((s: unknown) => String(s).trim())
             .filter((s: string) => s && s.toUpperCase() !== 'ALL')
         )
       );
@@ -2875,10 +3172,10 @@ async function validatePublishTargets(rawTargets: any[]) {
   }
 
   // 2. Query actual students from MongoDB Atlas for each target
-  const targetStudentsMap: any[][] = [];
+  const targetStudentsMap: TargetStudentLean[][] = [];
   for (let i = 0; i < normalizedTargets.length; i++) {
     const t = normalizedTargets[i];
-    const q: any = {
+    const q: Record<string, unknown> = {
       role: 'student',
       schoolId: { $in: t.schoolIds },
     };
@@ -2906,12 +3203,12 @@ async function validatePublishTargets(rawTargets: any[]) {
       schoolName: 1,
       className: 1,
       section: 1,
-    }).lean();
+    }).lean() as TargetStudentLean[];
     targetStudentsMap.push(students);
   }
 
   // 3. Detect Student-Level Overlaps based on actual student records in MongoDB Atlas
-  const studentTargetMap = new Map<string, { student: any; targetIndices: number[] }>();
+  const studentTargetMap = new Map<string, { student: TargetStudentLean; targetIndices: number[] }>();
   for (let i = 0; i < normalizedTargets.length; i++) {
     for (const st of targetStudentsMap[i]) {
       const studentKey = String(st.uniqueStudentId || st._id).trim();
@@ -2922,7 +3219,7 @@ async function validatePublishTargets(rawTargets: any[]) {
     }
   }
 
-  const conflictingPairs = new Map<string, { tA: number; tB: number; students: any[] }>();
+  const conflictingPairs = new Map<string, { tA: number; tB: number; students: TargetStudentLean[] }>();
   for (const [_, entry] of studentTargetMap.entries()) {
     if (entry.targetIndices.length > 1) {
       for (let a = 0; a < entry.targetIndices.length; a++) {
@@ -2999,10 +3296,51 @@ async function validatePublishTargets(rawTargets: any[]) {
   };
 }
 
+export interface TargetableStudent {
+  schoolId?: unknown;
+  schoolName?: unknown;
+  className?: unknown;
+  section?: unknown;
+  uniqueStudentId?: unknown;
+  username?: unknown;
+  studentId?: unknown;
+  _id?: unknown;
+  id?: unknown;
+  [key: string]: unknown;
+}
+
+export interface TargetablePublishedTest {
+  target?: {
+    schoolId?: string;
+    schoolIds?: string[];
+    schoolName?: string;
+    schoolNames?: string[];
+    classes?: string[];
+    className?: string;
+    sections?: string[];
+    studentIds?: string[];
+    isAllSchools?: boolean;
+    [key: string]: unknown;
+  };
+  targets?: Array<{
+    schoolId?: string;
+    schoolIds?: string[];
+    schoolName?: string;
+    schoolNames?: string[];
+    classes?: string[];
+    className?: string;
+    sections?: string[];
+    studentIds?: string[];
+    isAllSchools?: boolean;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+}
+
 // Helper to verify whether a student matches the targets of a published test
 export function isStudentTargetedByPublishedTest(
-  student: any,
-  pubTest: any,
+  student: TargetableStudent | null | undefined,
+  pubTest: TargetablePublishedTest | null | undefined,
   _totalSchoolsCount?: number
 ): boolean {
   if (!pubTest || !student) return false;
@@ -3032,14 +3370,14 @@ export function isStudentTargetedByPublishedTest(
     // 1. School check
     const sIds: string[] = [];
     if (Array.isArray(t.schoolIds)) {
-      sIds.push(...t.schoolIds.map((s: any) => String(s).trim()).filter(Boolean));
+      sIds.push(...t.schoolIds.map((s: unknown) => String(s).trim()).filter(Boolean));
     } else if (t.schoolId) {
-      sIds.push(...(Array.isArray(t.schoolId) ? t.schoolId.map((s: any) => String(s).trim()) : [String(t.schoolId).trim()]).filter(Boolean));
+      sIds.push(...(Array.isArray(t.schoolId) ? t.schoolId.map((s: unknown) => String(s).trim()) : [String(t.schoolId).trim()]).filter(Boolean));
     }
 
     const sNames: string[] = [];
     if (Array.isArray(t.schoolNames)) {
-      sNames.push(...t.schoolNames.map((s: any) => String(s).trim().toLowerCase()).filter(Boolean));
+      sNames.push(...t.schoolNames.map((s: unknown) => String(s).trim().toLowerCase()).filter(Boolean));
     } else if (t.schoolName) {
       sNames.push(...String(t.schoolName).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
     }
@@ -3059,7 +3397,7 @@ export function isStudentTargetedByPublishedTest(
     // 2. Class check
     const cList: string[] = [];
     if (Array.isArray(t.classes)) {
-      cList.push(...t.classes.map((c: any) => String(c).trim().toLowerCase()).filter(Boolean));
+      cList.push(...t.classes.map((c: unknown) => String(c).trim().toLowerCase()).filter(Boolean));
     } else if (t.className) {
       cList.push(...String(t.className).split(',').map((c) => c.trim().toLowerCase()).filter(Boolean));
     }
@@ -3077,7 +3415,7 @@ export function isStudentTargetedByPublishedTest(
     // 3. Section check
     const secList: string[] = [];
     if (Array.isArray(t.sections)) {
-      secList.push(...t.sections.map((s: any) => String(s).trim().toUpperCase()).filter(Boolean));
+      secList.push(...t.sections.map((s: unknown) => String(s).trim().toUpperCase()).filter(Boolean));
     } else if (t.section) {
       secList.push(...String(t.section).split(',').map((s) => s.trim().toUpperCase()).filter(Boolean));
     }
@@ -3095,7 +3433,7 @@ export function isStudentTargetedByPublishedTest(
     // 4. Student check
     const stuList: string[] = [];
     if (Array.isArray(t.studentIds)) {
-      stuList.push(...t.studentIds.map((s: any) => String(s).trim()).filter(Boolean));
+      stuList.push(...t.studentIds.map((s: unknown) => String(s).trim()).filter(Boolean));
     }
 
     const isAllStudents =
@@ -4846,10 +5184,18 @@ router.post('/student/logout', authenticate, async (req: Request, res: Response)
       );
     }
 
-    // SEC-MED-04: Revoke authentication token on student logout
+    // SEC-MED-04 & SEC-05: Revoke authentication token and clear cookies on student logout
     if (req.token) {
       revokeToken(req.token);
     }
+    const refreshToken = req.cookies?.[AUTH_COOKIE_NAMES.REFRESH_TOKEN];
+    if (refreshToken) {
+      try {
+        const decoded = jwt.decode(refreshToken) as any;
+        if (decoded?.jti) revokeToken(decoded.jti);
+      } catch (_) {}
+    }
+    clearAuthCookies(res);
 
     return res.json({
       success: true,
@@ -4903,10 +5249,10 @@ router.post('/student/tests/:assignmentId/answer', authenticate, answerRateLimit
       });
     }
 
-    const questionIndex = assignment.questions.findIndex((q: any) => q.questionId === questionId);
+    const questionIndex = assignment.questions.findIndex((q: QuestionAttemptLog) => q.questionId === questionId);
     if (questionIndex === -1) return res.status(404).json({ error: 'Question not found in this test' });
 
-    const qItem = assignment.questions[questionIndex];
+    const qItem: QuestionAttemptLog = assignment.questions[questionIndex];
 
     // SEC-CRIT-03: Once a question answer is accepted, it must not be changed through repeated answer requests
     const alreadyAnswered = qItem.studentAnswer !== undefined && qItem.studentAnswer !== null;
@@ -4993,10 +5339,16 @@ router.post('/student/tests/:assignmentId/submit', authenticate, async (req: Req
     // SEC-CRIT-03: Preserve previously submitted answers so they cannot be altered upon submit
     const { answers } = req.body;
     if (answers && Array.isArray(answers)) {
-      for (const ansItem of answers) {
-        const qIdx = assignment.questions.findIndex((q: any) => q.questionId === ansItem.questionId);
+      interface SubmittedAnswerPayload {
+        questionId?: string;
+        answer?: StudentAnswerValue;
+        timeTakenSeconds?: number;
+        writtenExplanation?: string;
+      }
+      for (const ansItem of (answers as SubmittedAnswerPayload[])) {
+        const qIdx = assignment.questions.findIndex((q: QuestionAttemptLog) => q.questionId === ansItem.questionId);
         if (qIdx !== -1) {
-          const qItem = assignment.questions[qIdx];
+          const qItem: QuestionAttemptLog = assignment.questions[qIdx];
           const alreadyAnswered = qItem.studentAnswer !== undefined && qItem.studentAnswer !== null;
           const answerToUse = alreadyAnswered ? qItem.studentAnswer : ansItem.answer;
           const timeToUse = alreadyAnswered ? qItem.timeTakenSeconds : Math.max(0, Number(ansItem.timeTakenSeconds) || 0);
@@ -5148,13 +5500,13 @@ router.get('/publish-history', authenticate, requireRole('super_admin'), async (
       schoolCountsMap.get(pId)!.push({ schoolName: sName, schoolId: item._id.schoolId, count: item.count });
     }
 
-    const formatted = formatDocs(history).map((h: any) => {
+    const formatted = formatDocs<IPublishHistoryDocument>(history).map((h) => {
       let schoolCounts = schoolCountsMap.get(h.publishId) || [];
       // Fallback if no live assignments exist (e.g. legacy publish records)
       if (schoolCounts.length === 0) {
         if (Array.isArray(h.studentsStatus) && h.studentsStatus.length > 0) {
           const sMap = new Map<string, number>();
-          for (const st of h.studentsStatus) {
+          for (const st of (h.studentsStatus as Array<{ schoolName?: string }>)) {
             const name = st.schoolName || h.schoolName || 'School';
             sMap.set(name, (sMap.get(name) || 0) + 1);
           }
@@ -5162,7 +5514,7 @@ router.get('/publish-history', authenticate, requireRole('super_admin'), async (
         } else if (h.schoolNames && h.schoolNames.length > 0) {
           schoolCounts = h.schoolNames.map((name: string) => ({
             schoolName: name,
-            count: Math.round((h.totalRecipients || 0) / h.schoolNames.length) || 1,
+            count: Math.round((h.totalRecipients || 0) / (h.schoolNames?.length || 1)) || 1,
           }));
         } else if (h.schoolName) {
           schoolCounts = [{ schoolName: h.schoolName, count: h.totalRecipients || 0 }];
@@ -5791,7 +6143,7 @@ router.get('/reports/schools/:schoolId/students', authenticate, requireRole('sup
     }
 
     const students = await UserModel.find(query, { passwordHash: 0 });
-    const sorted = formatDocs(students).sort((a: any, b: any) =>
+    const sorted = formatDocs<User>(students).sort((a, b) =>
       (a.studentName || '').localeCompare(b.studentName || '', undefined, { numeric: true, sensitivity: 'base' })
     );
     return res.json(sorted);
@@ -6087,13 +6439,13 @@ router.put(
       }
 
       const qIdx = assignment.questions.findIndex(
-        (q: any) => String(q.questionId || q.id || q._id) === String(questionId)
+        (q: QuestionAttemptLog) => String(q.questionId || q.id || q._id) === String(questionId)
       );
       if (qIdx === -1) {
         return res.status(404).json({ error: 'Question not found in this assessment.' });
       }
 
-      const qItem = assignment.questions[qIdx];
+      const qItem: QuestionAttemptLog = assignment.questions[qIdx];
       const parsedScore = Number(score);
 
       const maxPts = qItem.points != null && Number(qItem.points) > 0 ? Number(qItem.points) : null;
