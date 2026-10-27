@@ -2697,7 +2697,9 @@ router.post(
       });
     } catch (err: any) {
       console.error('[Upload Image Error]:', err.message || err);
-      return res.status(400).json({ error: err.message || 'Failed to upload image' });
+      const isStorageConfigError = typeof err?.message === 'string' &&
+        (err.message.includes('Persistent image storage') || err.message.includes('AWS S3'));
+      return res.status(isStorageConfigError ? 503 : 400).json({ error: err.message || 'Failed to upload image' });
     }
   }
 );
@@ -2745,7 +2747,9 @@ router.post(
       });
     } catch (err: any) {
       console.error('[Upload Multiple Images Error]:', err.message || err);
-      return res.status(400).json({ error: err.message || 'Failed to upload images' });
+      const isStorageConfigError = typeof err?.message === 'string' &&
+        (err.message.includes('Persistent image storage') || err.message.includes('AWS S3'));
+      return res.status(isStorageConfigError ? 503 : 400).json({ error: err.message || 'Failed to upload images' });
     }
   }
 );

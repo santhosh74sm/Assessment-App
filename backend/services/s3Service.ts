@@ -39,7 +39,12 @@ class S3Service {
     this.init();
   }
 
+  public reconfigure(): void {
+    this.init();
+  }
+
   private init() {
+    const isProduction = process.env.NODE_ENV === 'production';
     const region = process.env.AWS_REGION || 'us-east-1';
     const accessKeyId = process.env.AWS_ACCESS_KEY_ID?.trim() || '';
     const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY?.trim() || '';
@@ -63,22 +68,58 @@ class S3Service {
         this.isConfigured = true;
         console.log(`[S3Service] AWS S3 initialized for bucket: ${this.bucketName} in region: ${region}`);
       } catch (err: any) {
-        console.warn(`[S3Service] Failed to initialize AWS S3 client: ${err.message}. Falling back to local media store.`);
         this.s3Client = null;
         this.isConfigured = false;
+        if (isProduction) {
+          console.error(`[S3Service] CRITICAL: Failed to initialize AWS S3 client in production: ${err.message}. Image uploads will be rejected.`);
+        } else {
+          console.warn(`[S3Service] Failed to initialize AWS S3 client: ${err.message}. Falling back to local media store.`);
+        }
       }
     } else {
-      console.log(`[S3Service] AWS S3 credentials not fully configured in environment. Local media store active for offline/preview resilience.`);
+      this.s3Client = null;
       this.isConfigured = false;
+      if (isProduction) {
+        const missing: string[] = [];
+        if (!accessKeyId) missing.push('AWS_ACCESS_KEY_ID');
+        if (!secretAccessKey) missing.push('AWS_SECRET_ACCESS_KEY');
+        if (!bucket) missing.push('AWS_S3_BUCKET');
+        console.warn(`[S3Service] WARNING: Persistent S3 storage is not configured in production (missing: ${missing.join(', ')}). Image uploads will be rejected until S3 configuration is provided.`);
+      } else {
+        console.log(`[S3Service] AWS S3 credentials not fully configured in environment. Local media store active for offline/preview resilience.`);
+      }
     }
   }
 
   public getStatus() {
+    const isProduction = process.env.NODE_ENV === 'production';
     return {
       isConfigured: this.isConfigured,
-      bucket: this.bucketName || 'local-fallback',
+      storageDriver: this.isConfigured ? 's3' : (isProduction ? 'disabled' : 'local-filesystem'),
+      bucket: this.bucketName || (isProduction ? 'unconfigured' : 'local-fallback'),
       region: process.env.AWS_REGION || 'us-east-1',
+      mode: isProduction ? 'production' : 'development',
     };
+  }
+
+  /**
+   * Validates storage readiness before accepting uploads.
+   * In production, persistent S3 storage must be configured and active.
+   * Throws an actionable error if production storage requirements are not met.
+   */
+  public validateStorageReadiness(): void {
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isProduction && (!this.isConfigured || !this.s3Client)) {
+      const missing: string[] = [];
+      if (!process.env.AWS_ACCESS_KEY_ID?.trim()) missing.push('AWS_ACCESS_KEY_ID');
+      if (!process.env.AWS_SECRET_ACCESS_KEY?.trim()) missing.push('AWS_SECRET_ACCESS_KEY');
+      if (!process.env.AWS_S3_BUCKET?.trim()) missing.push('AWS_S3_BUCKET');
+
+      const details = missing.length > 0 ? ` Missing required configuration: ${missing.join(', ')}.` : '';
+      throw new Error(
+        `Persistent image storage (AWS S3) is not available or properly configured in production.${details} Local filesystem storage fallback is disabled in production.`
+      );
+    }
   }
 
   /**
@@ -98,7 +139,9 @@ class S3Service {
   }
 
   /**
-   * Upload image to AWS S3 (or fallback to persistent local uploads if AWS credentials not set).
+   * Upload image to AWS S3.
+   * In production: Requires persistent S3 storage; rejects upload if S3 fails or is not configured.
+   * In development: Falls back to local filesystem storage if S3 is not configured.
    */
   public async uploadImage(
     buffer: Buffer,
@@ -107,11 +150,14 @@ class S3Service {
     folderPrefix: string = 'questions'
   ): Promise<S3UploadResult> {
     this.validateImage(buffer, mimeType, originalName);
+    this.validateStorageReadiness();
 
     // Sanitize extension and filename
     const ext = path.extname(originalName).toLowerCase() || '.png';
     const randomUuid = crypto.randomUUID();
     const s3Key = `${folderPrefix}/${randomUuid}${ext}`;
+
+    const isProduction = process.env.NODE_ENV === 'production';
 
     if (this.isConfigured && this.s3Client) {
       try {
@@ -146,11 +192,21 @@ class S3Service {
           size: buffer.length,
         };
       } catch (err: any) {
-        console.error(`[S3Service] Upload to S3 failed: ${err.message}. Falling back to local store.`);
+        if (isProduction) {
+          console.error(`[S3Service] Upload to S3 failed in production: ${err.message}`);
+          throw new Error(`Failed to upload image to persistent storage (AWS S3): ${err.message || 'Unknown S3 error'}`);
+        }
+        console.warn(`[S3Service] Upload to S3 failed in development: ${err.message}. Falling back to local store.`);
       }
     }
 
-    // Local filesystem storage fallback (resilient when S3 bucket is not yet provisioned in dev/test)
+    // Local filesystem storage fallback (ALLOWED ONLY IN DEVELOPMENT/TESTING)
+    if (isProduction) {
+      throw new Error(
+        'Persistent image storage (AWS S3) is not available. Local filesystem storage fallback is strictly disabled in production.'
+      );
+    }
+
     const localDir = path.resolve(process.cwd(), 'public', 'uploads', folderPrefix);
     if (!fs.existsSync(localDir)) {
       fs.mkdirSync(localDir, { recursive: true });
@@ -305,35 +361,34 @@ class S3Service {
       return null;
     }
 
-    if (!this.isConfigured || !this.s3Client) {
-      // Check local uploads
-      const localFilePath = this.getSafeLocalPath(s3Key);
-      if (localFilePath && fs.existsSync(localFilePath) && !fs.statSync(localFilePath).isDirectory()) {
+    if (this.isConfigured && this.s3Client) {
+      try {
+        const command = new GetObjectCommand({
+          Bucket: this.bucketName,
+          Key: s3Key,
+        });
+
+        const response = await this.s3Client.send(command);
         return {
-          stream: fs.createReadStream(localFilePath),
-          contentType: this.guessMimeType(localFilePath),
-          contentLength: fs.statSync(localFilePath).size,
+          stream: response.Body as any,
+          contentType: response.ContentType || 'image/png',
+          contentLength: response.ContentLength,
         };
+      } catch (err: any) {
+        console.warn(`[S3Service] Could not retrieve S3 object '${s3Key}':`, err.message);
       }
-      return null;
     }
 
-    try {
-      const command = new GetObjectCommand({
-        Bucket: this.bucketName,
-        Key: s3Key,
-      });
-
-      const response = await this.s3Client.send(command);
+    // Check local uploads (preserves legacy/existing image compatibility)
+    const localFilePath = this.getSafeLocalPath(s3Key);
+    if (localFilePath && fs.existsSync(localFilePath) && !fs.statSync(localFilePath).isDirectory()) {
       return {
-        stream: response.Body as any,
-        contentType: response.ContentType || 'image/png',
-        contentLength: response.ContentLength,
+        stream: fs.createReadStream(localFilePath),
+        contentType: this.guessMimeType(localFilePath),
+        contentLength: fs.statSync(localFilePath).size,
       };
-    } catch (err: any) {
-      console.warn(`[S3Service] Could not retrieve S3 object '${s3Key}':`, err.message);
-      return null;
     }
+    return null;
   }
 
   /**

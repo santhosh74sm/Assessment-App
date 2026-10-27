@@ -46,7 +46,7 @@ async function startServer() {
     targetPort = cliPort;
   } else if (process.env.DEFAULT_APP_PORT) {
     targetPort = Number(process.env.DEFAULT_APP_PORT);
-  } else if (isDevCommand || process.env.PORT === '8080') {
+  } else if (isDevCommand) {
     targetPort = 3000;
   } else {
     targetPort = Number(process.env.PORT) || 3000;
