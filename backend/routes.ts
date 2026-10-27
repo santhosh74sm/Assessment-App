@@ -785,14 +785,29 @@ router.post('/students', authenticate, async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Section is required' });
     }
 
-    // Unique App Number / Student ID
+    // Unique App Number / Student ID with Bounded Retry Limit
+    const MAX_ID_ATTEMPTS = 15;
     let uniqueStudentId = '';
     let isUnique = false;
-    while (!isUnique) {
+
+    for (let attempt = 0; attempt < MAX_ID_ATTEMPTS; attempt++) {
       const randomSuffix = crypto.randomInt(1000, 10000);
-      uniqueStudentId = `STU-${cleanClass}${cleanSection}-${randomSuffix}`;
-      const exists = await UserModel.findOne({ username: uniqueStudentId });
-      if (!exists) isUnique = true;
+      const candidateId = `STU-${cleanClass}${cleanSection}-${randomSuffix}`;
+      const exists = await UserModel.findOne(
+        { $or: [{ username: candidateId }, { uniqueStudentId: candidateId }] },
+        { _id: 1 }
+      ).lean();
+      if (!exists) {
+        uniqueStudentId = candidateId;
+        isUnique = true;
+        break;
+      }
+    }
+
+    if (!isUnique) {
+      return res.status(500).json({
+        error: 'Unable to generate a unique Student ID after multiple attempts. Please try again.',
+      });
     }
 
     // SEC-HIGH-01 & SEC-MED-03: Generate cryptographically secure initial temporary password
@@ -2354,6 +2369,11 @@ router.get('/media/image/:key(*)', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Image key is required' });
     }
 
+    // SEC-01: Reject path traversal patterns and directory boundary escapes
+    if (!s3Service.isSafeKey(s3Key)) {
+      return res.status(400).json({ error: 'Invalid or forbidden image path' });
+    }
+
     const media = await s3Service.getObjectStream(s3Key);
     if (!media || !media.stream) {
       return res.status(404).json({ error: 'Image not found' });
@@ -2474,6 +2494,11 @@ router.delete('/uploads/image', authenticate, requireRole('super_admin'), async 
     const { s3Key } = req.body;
     if (!s3Key) {
       return res.status(400).json({ error: 's3Key is required for deletion' });
+    }
+
+    // SEC-01: Reject path traversal patterns and directory boundary escapes
+    if (!s3Service.isSafeKey(s3Key)) {
+      return res.status(400).json({ error: 'Invalid or forbidden image key for deletion' });
     }
 
     const deleted = await s3Service.deleteImage(s3Key);

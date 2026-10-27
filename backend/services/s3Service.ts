@@ -172,9 +172,114 @@ class S3Service {
   }
 
   /**
+   * Safely resolves and validates a key against the permitted local uploads directory.
+   * Returns the canonical absolute path if valid, or null if the key attempts path traversal
+   * or points outside the permitted uploads directory.
+   */
+  public getSafeLocalPath(key: string): string | null {
+    if (!key || typeof key !== 'string') {
+      return null;
+    }
+
+    // Repeatedly decode URL-encoded components to neutralize double/nested encoding
+    let decodedKey = key;
+    try {
+      let previous = '';
+      let iterations = 0;
+      while (decodedKey !== previous && iterations < 5) {
+        previous = decodedKey;
+        if (decodedKey.includes('%')) {
+          decodedKey = decodeURIComponent(decodedKey);
+        }
+        iterations++;
+      }
+    } catch {
+      // Malformed URI encoding
+      return null;
+    }
+
+    // Disallow null bytes
+    if (decodedKey.includes('\0') || decodedKey.includes('\x00')) {
+      return null;
+    }
+
+    // Normalize slashes
+    const sanitizedKey = decodedKey.replace(/\\/g, '/').trim();
+
+    // Disallow absolute paths (POSIX / or Windows C: or \\)
+    if (
+      path.isAbsolute(sanitizedKey) ||
+      path.isAbsolute(decodedKey) ||
+      /^[a-zA-Z]:/.test(sanitizedKey) ||
+      sanitizedKey.startsWith('/') ||
+      sanitizedKey.startsWith('\\')
+    ) {
+      return null;
+    }
+
+    // Disallow referencing the root directory itself or trailing directory slashes
+    if (sanitizedKey === '' || sanitizedKey === '.' || sanitizedKey.endsWith('/')) {
+      return null;
+    }
+
+    const permittedBase = path.resolve(process.cwd(), 'public', 'uploads');
+    const targetPath = path.resolve(permittedBase, sanitizedKey);
+
+    // 1. Path relative check: Target must reside strictly within permittedBase and not be base itself
+    const relative = path.relative(permittedBase, targetPath);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+      return null;
+    }
+
+    // 2. Strict prefix check with path.sep (case-insensitive for Windows filesystem)
+    const normalizedBase = path.normalize(permittedBase).toLowerCase() + path.sep;
+    const normalizedTarget = path.normalize(targetPath).toLowerCase();
+
+    if (!normalizedTarget.startsWith(normalizedBase)) {
+      return null;
+    }
+
+    // 3. Symlink canonical validation and directory check if file exists
+    if (fs.existsSync(targetPath)) {
+      try {
+        if (fs.statSync(targetPath).isDirectory()) {
+          return null;
+        }
+
+        const realTargetPath = fs.realpathSync(targetPath);
+        const realBaseDir = fs.existsSync(permittedBase) ? fs.realpathSync(permittedBase) : permittedBase;
+        const realBaseNormalized = path.normalize(realBaseDir).toLowerCase() + path.sep;
+        const realTargetNormalized = path.normalize(realTargetPath).toLowerCase();
+
+        if (!realTargetNormalized.startsWith(realBaseNormalized)) {
+          return null;
+        }
+      } catch {
+        return null;
+      }
+    }
+
+    return targetPath;
+  }
+
+  /**
+   * Validates whether an image key is safe and stays strictly within the permitted uploads hierarchy.
+   */
+  public isSafeKey(key: string): boolean {
+    if (!key || typeof key !== 'string') {
+      return false;
+    }
+    return this.getSafeLocalPath(key) !== null;
+  }
+
+  /**
    * Generates a time-limited presigned GET URL for an S3 object.
    */
   public async getPresignedUrl(s3Key: string, expiresInSeconds: number = 3600): Promise<string> {
+    if (!this.isSafeKey(s3Key)) {
+      throw new Error('Invalid or unsafe image key.');
+    }
+
     if (!this.isConfigured || !this.s3Client) {
       // Local fallback URL
       if (s3Key.startsWith('questions/')) {
@@ -196,10 +301,14 @@ class S3Service {
    * Stream S3 object to an Express response or return buffer.
    */
   public async getObjectStream(s3Key: string) {
+    if (!this.isSafeKey(s3Key)) {
+      return null;
+    }
+
     if (!this.isConfigured || !this.s3Client) {
       // Check local uploads
-      const localFilePath = path.resolve(process.cwd(), 'public', 'uploads', s3Key);
-      if (fs.existsSync(localFilePath)) {
+      const localFilePath = this.getSafeLocalPath(s3Key);
+      if (localFilePath && fs.existsSync(localFilePath) && !fs.statSync(localFilePath).isDirectory()) {
         return {
           stream: fs.createReadStream(localFilePath),
           contentType: this.guessMimeType(localFilePath),
@@ -231,7 +340,7 @@ class S3Service {
    * Delete an image from AWS S3 or local fallback.
    */
   public async deleteImage(s3Key: string): Promise<boolean> {
-    if (!s3Key) return false;
+    if (!s3Key || !this.isSafeKey(s3Key)) return false;
 
     if (this.isConfigured && this.s3Client) {
       try {
@@ -248,8 +357,8 @@ class S3Service {
 
     // Try deleting from local fallback
     try {
-      const localFilePath = path.resolve(process.cwd(), 'public', 'uploads', s3Key);
-      if (fs.existsSync(localFilePath)) {
+      const localFilePath = this.getSafeLocalPath(s3Key);
+      if (localFilePath && fs.existsSync(localFilePath) && !fs.statSync(localFilePath).isDirectory()) {
         fs.unlinkSync(localFilePath);
         return true;
       }
