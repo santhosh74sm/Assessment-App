@@ -151,11 +151,7 @@ export default function App() {
   );
 }
 
-function getCsrfToken(): string | null {
-  if (typeof document === 'undefined') return null;
-  const match = document.cookie.match(/(?:^|;\s*)puzzles_csrf_token=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
+import { getCsrfToken, setCsrfToken } from './utils/csrf.ts';
 
 function AppContent() {
   const { theme, setTheme } = useTheme();
@@ -221,6 +217,7 @@ function AppContent() {
         if (res.ok) {
           const fresh = await res.json();
           setCurrentUser(fresh);
+          if (fresh.csrfToken) setCsrfToken(fresh.csrfToken);
           if (fresh.token) setToken(fresh.token);
         } else if (res.status === 401) {
           // Attempt automatic access-token refresh via HttpOnly refresh cookie
@@ -232,6 +229,7 @@ function AppContent() {
             if (refreshRes.ok) {
               const refreshData = await refreshRes.json();
               setCurrentUser(refreshData.user);
+              if (refreshData.csrfToken) setCsrfToken(refreshData.csrfToken);
               if (refreshData.token) setToken(refreshData.token);
             } else {
               setCurrentUser(null);
@@ -267,12 +265,18 @@ function AppContent() {
         body: JSON.stringify({ username, password }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || 'Username or password is incorrect.');
+        throw new Error(
+          data.error ||
+            (res.status === 503
+              ? 'Database service is temporarily unavailable. Please try again shortly.'
+              : 'Username or password is incorrect.')
+        );
       }
 
       // SEC-05: In-memory session state only
+      if (data.csrfToken) setCsrfToken(data.csrfToken);
       setToken(data.token);
       setCurrentUser(data.user);
       try {
@@ -289,10 +293,14 @@ function AppContent() {
     } catch (err: any) {
       const msg = err.message || '';
       if (
+        msg.toLowerCase().includes('failed to fetch') ||
+        msg.toLowerCase().includes('networkerror')
+      ) {
+        setError('Unable to reach the server. Please check your network connection or try again later.');
+      } else if (
         msg.toLowerCase().includes('authentication') ||
         msg.toLowerCase().includes('credential') ||
-        msg.toLowerCase().includes('invalid username') ||
-        msg.toLowerCase().includes('failed to fetch')
+        msg.toLowerCase().includes('invalid username')
       ) {
         setError('Username or password is incorrect.');
       } else {
@@ -322,9 +330,14 @@ function AppContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: trimmed }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to submit reset request.');
+        throw new Error(
+          data.error ||
+            (res.status === 503
+              ? 'Database service is temporarily unavailable. Please try again shortly.'
+              : 'Failed to submit reset request.')
+        );
       }
       setForgotMessage(
         data.message ||

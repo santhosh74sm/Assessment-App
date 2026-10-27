@@ -93,7 +93,9 @@ export async function connectMongoDB(): Promise<{ isConnected: boolean; dbName: 
 
     await mongoose.connect(finalUri, {
       dbName: targetDb,
-      serverSelectionTimeoutMS: 5000,
+      serverSelectionTimeoutMS: 8000,
+      connectTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
       autoIndex: true,
     });
 
@@ -125,6 +127,11 @@ export async function connectMongoDB(): Promise<{ isConnected: boolean; dbName: 
     const errorName = typeof err?.name === 'string' ? err.name : 'UnknownError';
     const errorCode = typeof err?.code === 'string' || typeof err?.code === 'number' ? `, code: ${err.code}` : '';
     console.warn(`[Database] MongoDB connection notice (${errorName}${errorCode}):`, err.message || err);
+    try {
+      if (mongoose.connection.readyState !== 0) {
+        await mongoose.disconnect();
+      }
+    } catch (_) {}
     return { isConnected: false, dbName: 'none' };
   }
 }
@@ -204,6 +211,54 @@ export async function ensureInitialSuperAdmin() {
   }
 }
 
+export function isMongoReady(): boolean {
+  return mongoose.connection.readyState === 1;
+}
+
+let hasRegisteredListeners = false;
+export function registerConnectionListeners(): void {
+  if (hasRegisteredListeners) return;
+  hasRegisteredListeners = true;
+
+  mongoose.connection.on('disconnected', () => {
+    console.warn('[Database] Notice: MongoDB connection lost. Database operating in offline/preview mode.');
+  });
+  mongoose.connection.on('reconnected', () => {
+    console.log('[Database] MongoDB connection re-established.');
+  });
+  mongoose.connection.on('error', (err: any) => {
+    console.warn('[Database] MongoDB connection event notice:', err?.message || err);
+  });
+}
+
+let reconnectTimer: NodeJS.Timeout | null = null;
+export function startBackgroundMongoReconnect(intervalMs = 15000): void {
+  if (reconnectTimer) return;
+  reconnectTimer = setInterval(async () => {
+    if (mongoose.connection.readyState === 0) {
+      console.log('[Database] Attempting background MongoDB reconnection...');
+      const res = await connectMongoDB();
+      if (res.isConnected) {
+        console.log(`[Database] Background reconnection successful (database: ${res.dbName}).`);
+        if (reconnectTimer) {
+          clearInterval(reconnectTimer);
+          reconnectTimer = null;
+        }
+      }
+    }
+  }, intervalMs);
+  if (reconnectTimer.unref) {
+    reconnectTimer.unref();
+  }
+}
+
+export function stopBackgroundMongoReconnect(): void {
+  if (reconnectTimer) {
+    clearInterval(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
 export function getMongoConnectionInfo() {
   const isConnected = mongoose.connection.readyState === 1;
   return {
@@ -214,6 +269,7 @@ export function getMongoConnectionInfo() {
 }
 
 export async function closeMongoDB(): Promise<void> {
+  stopBackgroundMongoReconnect();
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();
   }

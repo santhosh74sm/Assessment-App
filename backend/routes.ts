@@ -302,8 +302,25 @@ router.get('/auth/setup-status', async (_req: Request, res: Response) => {
   }
 });
 
+function shouldEnforceSecureCookie(req: Request): boolean {
+  if (process.env.NODE_ENV !== 'production') return false;
+  const host = req.headers.host || '';
+  const isLocal = host.includes('localhost') || host.includes('127.0.0.1');
+  if (isLocal && !req.secure && req.headers['x-forwarded-proto'] !== 'https') {
+    return false;
+  }
+  return true;
+}
+
 // Setup First Super Admin (Only allowed when database has 0 users)
 router.post('/auth/setup-first-admin', async (req: Request, res: Response) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      error: 'Database service is temporarily unavailable. Cannot initialize administrator account.',
+      isConnected: false,
+    });
+  }
+
   try {
     const { username, password } = req.body;
     if (!username || !password) {
@@ -333,7 +350,7 @@ router.post('/auth/setup-first-admin', async (req: Request, res: Response) => {
     const { token: refreshToken } = generateRefreshToken(userPayload);
     const csrfToken = generateCsrfToken();
 
-    setAuthCookies(res, accessToken, refreshToken, csrfToken);
+    setAuthCookies(res, accessToken, refreshToken, csrfToken, shouldEnforceSecureCookie(req));
 
     return res.status(201).json({
       message: 'First Super Admin initialized successfully for production.',
@@ -356,6 +373,13 @@ router.post('/auth/setup-first-admin', async (req: Request, res: Response) => {
 // SEC-HIGH-02: Safe regex escaping to prevent ReDoS
 // SEC-INFO-01: Removed /tmp/auth.log credential logging
 router.post('/auth/login', loginRateLimiter, async (req: Request, res: Response) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      error: 'Authentication service is temporarily unavailable. Database connection is not ready. Please try again shortly.',
+      isConnected: false,
+    });
+  }
+
   try {
     const { username, password } = req.body;
 
@@ -407,7 +431,7 @@ router.post('/auth/login', loginRateLimiter, async (req: Request, res: Response)
     const { token: refreshToken } = generateRefreshToken(userPayload);
     const csrfToken = generateCsrfToken();
 
-    setAuthCookies(res, accessToken, refreshToken, csrfToken);
+    setAuthCookies(res, accessToken, refreshToken, csrfToken, shouldEnforceSecureCookie(req));
 
     return res.json({
       token: accessToken,
@@ -427,6 +451,24 @@ router.post('/auth/login', loginRateLimiter, async (req: Request, res: Response)
       },
     });
   } catch (err: any) {
+    if (
+      err?.name === 'MongooseError' ||
+      err?.name === 'MongoNetworkError' ||
+      err?.name === 'MongoServerSelectionError' ||
+      (typeof err?.message === 'string' &&
+        (err.message.includes('bufferCommands = false') ||
+         err.message.includes('buffering timed out') ||
+         err.message.includes('not connected') ||
+         err.message.includes('ECONNREFUSED') ||
+         err.message.includes('ETIMEDOUT')))
+    ) {
+      console.warn('[Auth Login] Database unavailable during login query:', err.message);
+      return res.status(503).json({
+        error: 'Authentication service is temporarily unavailable. Database connection is not ready. Please try again shortly.',
+        isConnected: false,
+      });
+    }
+
     console.error('[Auth Login Error]:', err.message || err);
     return res.status(500).json({ error: 'Username or password is incorrect.' });
   }
@@ -471,6 +513,12 @@ router.post('/auth/refresh', async (req: Request, res: Response) => {
     }
 
     // Find user to verify account is still active and valid
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        error: 'Database service is temporarily unavailable. Please try again shortly.',
+        isConnected: false,
+      });
+    }
     const user = await UserModel.findById(decoded.userId);
     if (!user) {
       clearAuthCookies(res);
@@ -495,7 +543,7 @@ router.post('/auth/refresh', async (req: Request, res: Response) => {
     const { token: newRefreshToken } = generateRefreshToken(userPayload);
     const newCsrfToken = generateCsrfToken();
 
-    setAuthCookies(res, newAccessToken, newRefreshToken, newCsrfToken);
+    setAuthCookies(res, newAccessToken, newRefreshToken, newCsrfToken, shouldEnforceSecureCookie(req));
 
     return res.json({
       success: true,
@@ -550,6 +598,13 @@ router.post('/auth/logout', authenticate, async (req: Request, res: Response) =>
 // SEC-HIGH-04: Rate limiting on forgot-password
 // SEC-HIGH-02: Safe regex escaping to prevent ReDoS
 router.post('/auth/forgot-password', forgotPasswordRateLimiter, async (req: Request, res: Response) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      error: 'Password reset service is temporarily unavailable. Database connection is not ready.',
+      isConnected: false,
+    });
+  }
+
   try {
     const { username } = req.body;
     if (!username || typeof username !== 'string') {
@@ -594,6 +649,13 @@ router.post('/auth/forgot-password', forgotPasswordRateLimiter, async (req: Requ
 
 // Force Password Change (Mandatory on first login or after password reset)
 router.post('/auth/change-password', authenticate, async (req: Request, res: Response) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      error: 'Password change service is temporarily unavailable. Database connection is not ready.',
+      isConnected: false,
+    });
+  }
+
   try {
     const { newPassword } = req.body;
     if (!newPassword || newPassword.trim().length < 4) {
@@ -625,6 +687,13 @@ router.post('/auth/change-password', authenticate, async (req: Request, res: Res
 
 // Get Current User Profile
 router.get('/auth/me', authenticate, async (req: Request, res: Response) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      error: 'Database service is temporarily unavailable. Please try again shortly.',
+      isConnected: false,
+    });
+  }
+
   try {
     const user = await UserModel.findById(req.user!.userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -635,7 +704,7 @@ router.get('/auth/me', authenticate, async (req: Request, res: Response) => {
       csrfToken = generateCsrfToken();
       res.cookie(AUTH_COOKIE_NAMES.CSRF_TOKEN, csrfToken, {
         httpOnly: false,
-        secure: process.env.NODE_ENV === 'production',
+        secure: shouldEnforceSecureCookie(req),
         sameSite: 'lax',
         path: '/',
         maxAge: 7 * 24 * 60 * 60 * 1000,
@@ -655,6 +724,7 @@ router.get('/auth/me', authenticate, async (req: Request, res: Response) => {
       schoolAdmissionNumber: user.schoolAdmissionNumber,
       uniqueStudentId: user.uniqueStudentId,
       csrfToken,
+      token: req.token,
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to get user profile' });

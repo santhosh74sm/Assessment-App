@@ -23,6 +23,7 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { formatAvailabilityWindow } from '../utils/dateTime.ts';
+import { getAuthHeaders } from '../utils/csrf.ts';
 import { StudentAssessmentPreviewModal } from './StudentAssessmentPreviewModal.tsx';
 
 interface PublishHistorySectionProps {
@@ -2189,10 +2190,8 @@ export function PublishHistorySection({
     try {
       const res = await fetch(`/api/publish-history/${pauseTarget.publishId}/pause`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        credentials: 'same-origin',
+        headers: getAuthHeaders(token),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -2219,10 +2218,8 @@ export function PublishHistorySection({
     try {
       const res = await fetch(`/api/publish-history/${resumeTarget.publishId}/resume`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        credentials: 'same-origin',
+        headers: getAuthHeaders(token),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -2249,9 +2246,8 @@ export function PublishHistorySection({
     try {
       const res = await fetch(`/api/publish-history/${deleteTarget.publishId}`, {
         method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        credentials: 'same-origin',
+        headers: getAuthHeaders(token),
       });
       const data = await res.json();
       if (!res.ok) {

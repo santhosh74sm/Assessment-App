@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Maximize2,
 } from 'lucide-react';
+import { getAuthHeaders, getCsrfToken } from '../utils/csrf.ts';
 
 interface QuestionBankSectionProps {
   token: string;
@@ -386,10 +387,8 @@ export function QuestionBankSection({
 
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${token}`,
-  };
+  const getHeaders = () => getAuthHeaders(token);
+  const headers = getHeaders();
 
   const handleDeleteQuestion = async () => {
     if (!deletingQuestion) return;
@@ -401,7 +400,8 @@ export function QuestionBankSection({
     try {
       const res = await fetch(`/api/questions/${qId}`, {
         method: 'DELETE',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
       });
       const data = await res.json();
       if (res.ok) {
@@ -456,7 +456,8 @@ export function QuestionBankSection({
     try {
       const res = await fetch(`/api/question-groups/${gId}`, {
         method: 'DELETE',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
       });
       const data = await res.json();
       if (res.ok) {
@@ -502,7 +503,8 @@ export function QuestionBankSection({
     try {
       const res = await fetch(`/api/question-groups/${gId}`, {
         method: 'PUT',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
         body: JSON.stringify({ name: editGroupName.trim() }),
       });
       const data = await res.json();
@@ -535,7 +537,8 @@ export function QuestionBankSection({
     try {
       const res = await fetch('/api/question-groups', {
         method: 'POST',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
         body: JSON.stringify({ name: newGroupName.trim(), description: newGroupDesc.trim() }),
       });
       const data = await res.json();
@@ -639,11 +642,15 @@ export function QuestionBankSection({
       formData.append('images', files[i]);
     }
     try {
+      const uploadHeaders: Record<string, string> = {};
+      if (token) uploadHeaders['Authorization'] = `Bearer ${token}`;
+      const csrf = getCsrfToken();
+      if (csrf) uploadHeaders['X-CSRF-Token'] = csrf;
+
       const res = await fetch('/api/uploads/images', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        credentials: 'same-origin',
+        headers: uploadHeaders,
         body: formData,
       });
 
@@ -691,11 +698,15 @@ export function QuestionBankSection({
     const formData = new FormData();
     formData.append('image', file);
     try {
+      const uploadHeaders: Record<string, string> = {};
+      if (token) uploadHeaders['Authorization'] = `Bearer ${token}`;
+      const csrf = getCsrfToken();
+      if (csrf) uploadHeaders['X-CSRF-Token'] = csrf;
+
       const res = await fetch('/api/uploads/image', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        credentials: 'same-origin',
+        headers: uploadHeaders,
         body: formData,
       });
 
@@ -777,6 +788,7 @@ export function QuestionBankSection({
         const qId = editingQuestionItem.id || editingQuestionItem._id;
         const res = await fetch(`/api/questions/${qId}`, {
           method: 'PUT',
+          credentials: 'same-origin',
           headers,
           body: JSON.stringify({
             groupId: questionForm.groupId,
@@ -808,6 +820,7 @@ export function QuestionBankSection({
         // Add Mode: POST /api/questions
         const res = await fetch('/api/questions', {
           method: 'POST',
+          credentials: 'same-origin',
           headers,
           body: JSON.stringify({
             groupId: questionForm.groupId,

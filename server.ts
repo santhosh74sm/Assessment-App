@@ -6,7 +6,13 @@ import routes from './backend/routes.ts';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { connectMongoDB, getMongoConnectionInfo } from './backend/database.ts';
+import {
+  connectMongoDB,
+  getMongoConnectionInfo,
+  registerConnectionListeners,
+  startBackgroundMongoReconnect,
+  stopBackgroundMongoReconnect,
+} from './backend/database.ts';
 import { getJwtSecret, parseCookies } from './backend/middleware/auth.ts';
 
 async function startServer() {
@@ -213,9 +219,8 @@ async function startServer() {
     return serverInstance;
   }
 
-  startListening(targetPort, fallbackPort);
-
   const cleanShutdown = () => {
+    stopBackgroundMongoReconnect();
     if (activeServer) {
       activeServer.close(() => {
         process.exit(0);
@@ -231,21 +236,27 @@ async function startServer() {
     console.warn('[System] Unhandled promise rejection notice:', reason);
   });
 
-  // Establish and verify MongoDB Connection asynchronously so server startup is instantaneous
+  // Register database connection lifecycle listeners
+  registerConnectionListeners();
+
+  // Establish and verify MongoDB Connection before opening HTTP listener
   console.log('[System] Initializing MongoDB database connection...');
-  connectMongoDB()
-    .then((dbInfo) => {
-      if (dbInfo.isConnected) {
-        console.log(`[System] Verified MongoDB connection to database: ${dbInfo.dbName}`);
-      } else {
-        console.warn('[System] MongoDB operating in offline/preview resilience mode.');
-      }
-    })
-    .catch((err: any) => {
-      const errorName = typeof err?.name === 'string' ? err.name : 'UnknownError';
-      const errorCode = typeof err?.code === 'string' || typeof err?.code === 'number' ? `, code: ${err.code}` : '';
-      console.warn(`[System] MongoDB connection unavailable (${errorName}${errorCode}).`);
-    });
+  try {
+    const dbInfo = await connectMongoDB();
+    if (dbInfo.isConnected) {
+      console.log(`[System] Verified MongoDB connection to database: ${dbInfo.dbName}`);
+    } else {
+      console.warn('[System] MongoDB operating in offline/preview resilience mode. Database-dependent endpoints (login, persistent auth, publish) will return 503 until connection is established.');
+      startBackgroundMongoReconnect(15000);
+    }
+  } catch (err: any) {
+    const errorName = typeof err?.name === 'string' ? err.name : 'UnknownError';
+    const errorCode = typeof err?.code === 'string' || typeof err?.code === 'number' ? `, code: ${err.code}` : '';
+    console.warn(`[System] MongoDB connection unavailable (${errorName}${errorCode}). Operating in offline/preview mode. Database-dependent endpoints will return 503 until connection is established.`);
+    startBackgroundMongoReconnect(15000);
+  }
+
+  startListening(targetPort, fallbackPort);
 }
 
 startServer().catch((err) => {

@@ -37,6 +37,7 @@ import {
   getLocalCurrentTime12H,
   formatAvailabilityWindow,
 } from '../utils/dateTime.ts';
+import { getAuthHeaders } from '../utils/csrf.ts';
 
 export interface TargetItem {
   id: string;
@@ -2304,10 +2305,8 @@ export function PublishAssessmentSection({
     }
   };
 
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${token}`,
-  };
+  const getHeaders = () => getAuthHeaders(token);
+  const headers = getHeaders();
 
   const fetchSavedTemplates = async (retryCount = 0) => {
     if (!token) return;
@@ -2315,10 +2314,8 @@ export function PublishAssessmentSection({
     setTemplateFetchError(null);
     try {
       const res = await fetch('/api/templates', {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        credentials: 'same-origin',
+        headers: getHeaders(),
       });
       if (res.ok) {
         const data = await res.json();

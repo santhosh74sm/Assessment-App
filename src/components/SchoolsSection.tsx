@@ -18,6 +18,7 @@ import {
   Check,
 } from 'lucide-react';
 import { StudentReportDetailView } from './StudentReportDetailView.tsx';
+import { getAuthHeaders } from '../utils/csrf.ts';
 
 interface SchoolsSectionProps {
   token: string;
@@ -92,10 +93,8 @@ export function SchoolsSection({ token, schools, onRefreshSchools }: SchoolsSect
     (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
   );
 
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${token}`,
-  };
+  const getHeaders = () => getAuthHeaders(token);
+  const headers = getHeaders();
 
   useEffect(() => {
     if (sortedSchools.length > 0 && !activeSchoolId) {
@@ -109,8 +108,8 @@ export function SchoolsSection({ token, schools, onRefreshSchools }: SchoolsSect
     setLoadingData(true);
     try {
       const [resStudents, resAdmins] = await Promise.all([
-        fetch(`/api/students?schoolId=${schoolId}`, { headers }),
-        fetch(`/api/schools/${schoolId}/admins`, { headers }),
+        fetch(`/api/students?schoolId=${schoolId}`, { headers: getHeaders(), credentials: 'same-origin' }),
+        fetch(`/api/schools/${schoolId}/admins`, { headers: getHeaders(), credentials: 'same-origin' }),
       ]);
       const dataStu = await resStudents.json();
       const dataAdm = await resAdmins.json();
@@ -143,7 +142,8 @@ export function SchoolsSection({ token, schools, onRefreshSchools }: SchoolsSect
     try {
       const res = await fetch('/api/schools', {
         method: 'POST',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
         body: JSON.stringify({ name: newSchoolName.trim(), code: newSchoolCode.trim().toUpperCase() }),
       });
       const data = await res.json();
@@ -168,7 +168,8 @@ export function SchoolsSection({ token, schools, onRefreshSchools }: SchoolsSect
     try {
       const res = await fetch(`/api/schools/${schoolId}/admins`, {
         method: 'POST',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
       });
       const data = await res.json();
       if (res.ok) {
@@ -199,7 +200,8 @@ export function SchoolsSection({ token, schools, onRefreshSchools }: SchoolsSect
     try {
       const res = await fetch('/api/students', {
         method: 'POST',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
         body: JSON.stringify({
           ...studentForm,
           section: studentForm.section.trim().toUpperCase(),
@@ -248,7 +250,8 @@ export function SchoolsSection({ token, schools, onRefreshSchools }: SchoolsSect
       const studentId = editingStudent.id || editingStudent.uniqueStudentId;
       const res = await fetch(`/api/students/${studentId}`, {
         method: 'PUT',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
         body: JSON.stringify({
           studentName: editForm.studentName.trim(),
           schoolAdmissionNumber: editForm.schoolAdmissionNumber.trim(),
@@ -289,7 +292,8 @@ export function SchoolsSection({ token, schools, onRefreshSchools }: SchoolsSect
       const studentId = deletingStudent.id || deletingStudent.uniqueStudentId;
       const res = await fetch(`/api/students/${studentId}`, {
         method: 'DELETE',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
       });
       const data = await res.json();
       if (res.ok) {
@@ -316,7 +320,8 @@ export function SchoolsSection({ token, schools, onRefreshSchools }: SchoolsSect
       const adminId = deletingAdmin.id || deletingAdmin.username;
       const res = await fetch(`/api/schools/${activeSchoolId}/admins/${adminId}`, {
         method: 'DELETE',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
       });
       const data = await res.json();
       if (res.ok) {
@@ -341,7 +346,8 @@ export function SchoolsSection({ token, schools, onRefreshSchools }: SchoolsSect
       const schoolId = deletingSchool.id || deletingSchool._id;
       const res = await fetch(`/api/schools/${schoolId}`, {
         method: 'DELETE',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
       });
       const data = await res.json();
       if (res.ok) {
@@ -376,7 +382,8 @@ export function SchoolsSection({ token, schools, onRefreshSchools }: SchoolsSect
     try {
       const res = await fetch('/api/super-admin/reset-password', {
         method: 'POST',
-        headers,
+        credentials: 'same-origin',
+        headers: getHeaders(),
         body: JSON.stringify({ userId: userObj.id || userObj._id }),
       });
       const data = await res.json();

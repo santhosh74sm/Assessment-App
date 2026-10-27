@@ -12,6 +12,7 @@ import { FlameMiniGameCanvas } from './FlameMiniGameCanvas.tsx';
 import { ProfileMenu } from './ProfileMenu.tsx';
 import confetti from 'canvas-confetti';
 import { to24Hour, toISODate, formatAvailabilityWindow } from '../utils/dateTime.ts';
+import { getAuthHeaders, getCsrfToken } from '../utils/csrf.ts';
 
 interface StudentPortalProps {
   token: string;
@@ -70,21 +71,17 @@ export function StudentPortal({ token, user, onLogout }: StudentPortalProps) {
     isSubmittingRef.current = isSubmitting;
   }, [isSubmitting]);
 
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${token}`,
-  };
+  const getHeaders = () => getAuthHeaders(token);
+  const headers = getHeaders();
 
   const getClientHeaders = () => {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const clientDateTime = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    return {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
+    return getAuthHeaders(token, {
       'x-client-now': clientDateTime,
       'x-timezone-offset': String(now.getTimezoneOffset()),
-    };
+    });
   };
 
   const loadStudentTests = async () => {

@@ -10,6 +10,7 @@ import {
 import { ProfileMenu } from './ProfileMenu.tsx';
 import type { PublishAssessmentFormState } from './PublishAssessmentSection.tsx';
 import { to12Hour, getLocalTodayDate, getLocalCurrentTime12H, getLocalFutureDate } from '../utils/dateTime.ts';
+import { getAuthHeaders } from '../utils/csrf.ts';
 
 // Code splitting for large workspace sub-sections (PERF-LOW-01)
 const SchoolsSection = lazy(() =>
@@ -63,13 +64,7 @@ export function SuperAdminDashboard({ token, currentUser, onLogout }: SuperAdmin
   const [publishFormState, setPublishFormState] = useState<PublishAssessmentFormState | undefined>(undefined);
   const [editingPublishId, setEditingPublishId] = useState<string | null>(null);
 
-  const headers = React.useMemo(
-    () => ({
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    }),
-    [token]
-  );
+  const headers = React.useMemo(() => getAuthHeaders(token), [token]);
 
   const loadSchools = React.useCallback(async () => {
     try {

@@ -1,15 +1,11 @@
 import { useState } from 'react';
 import { AlertCircle, KeyRound, Eye, EyeOff } from 'lucide-react';
+import { getAuthHeaders } from '../utils/csrf.ts';
 
 interface ForcePasswordModalProps {
   username: string;
   token?: string | null;
   onSuccess: () => void;
-}
-
-function getCsrfToken(): string | null {
-  const match = document.cookie.match(/(?:^|;\s*)puzzles_csrf_token=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
 }
 
 export function ForcePasswordModal({ username, token, onSuccess }: ForcePasswordModalProps) {
@@ -41,16 +37,7 @@ export function ForcePasswordModal({ username, token, onSuccess }: ForcePassword
 
     setLoading(true);
     try {
-      const csrfToken = getCsrfToken();
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-      if (csrfToken) {
-        headers['X-CSRF-Token'] = csrfToken;
-      }
+      const headers = getAuthHeaders(token);
 
       const res = await fetch('/api/auth/change-password', {
         method: 'POST',
