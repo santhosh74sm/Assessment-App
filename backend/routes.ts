@@ -3724,9 +3724,15 @@ router.post('/publish', authenticate, requireRole('super_admin'), async (req: Re
     if (previousRequest) {
       if (previousRequest.requestFingerprint === requestFingerprint && previousRequest.publishState === 'FAILED') {
         // Repair a prior failed attempt by removing only records tied to this request before retrying.
-        await StudentTestAssignmentModel.deleteMany({ publishedTestId: String(previousRequest._id) });
-        await PublishHistoryModel.deleteOne({ publishId: String(previousRequest._id) });
-        await PublishedTestModel.deleteOne({ _id: previousRequest._id, publishState: 'FAILED' });
+        try {
+          await StudentTestAssignmentModel.deleteMany({ publishedTestId: String(previousRequest._id) });
+          await PublishHistoryModel.deleteOne({ publishId: String(previousRequest._id) });
+          await PublishedTestModel.deleteOne({ _id: previousRequest._id, publishState: 'FAILED' });
+          console.log(`[Publish Repair] Cleaned up prior failed attempt ${previousRequest._id} for safe retry.`);
+        } catch (repairErr: any) {
+          console.error(`[Publish Repair Error] Failed to clean up prior failed publish attempt for ${previousRequest._id}: ${repairErr?.message || repairErr}`);
+          return res.status(500).json({ error: 'Failed to recover prior incomplete publishing attempt. Please retry shortly.' });
+        }
       } else {
         if (previousRequest.requestFingerprint !== requestFingerprint) {
           return res.status(409).json({ error: 'This Idempotency-Key was already used for a different publication request.' });
@@ -3971,28 +3977,34 @@ router.post('/publish', authenticate, requireRole('super_admin'), async (req: Re
       });
     }
 
-    // Multi-Document Transaction Execution:
-    // Guarantees PublishedTest, StudentTestAssignment, and PublishHistory writes succeed or fail together atomically.
+    // Multi-Document Transaction Execution & Fallback Strategy:
+    // When supported by MongoDB deployment (ReplicaSet / Atlas), groups PublishedTest,
+    // StudentTestAssignment, and PublishHistory writes atomically.
+    // If transactions are unsupported or disabled, falls back to resilient non-transactional
+    // writes with logged compensatory cleanup and recoverable failure state.
+    const isTxDisabled =
+      process.env.DISABLE_MONGO_TRANSACTIONS === 'true' ||
+      ((process.env.NODE_ENV === 'test' || process.env.APP_ENV === 'test') &&
+        req.get('X-Test-Disable-Transactions') === 'true');
+
+    let useTransaction = !isTxDisabled;
     let session: mongoose.ClientSession | null = null;
-    let useTransaction = false;
 
-    try {
-      session = await mongoose.startSession();
-      session.startTransaction();
-      useTransaction = true;
-    } catch (_sessionErr: any) {
-      session = null;
-      useTransaction = false;
+    if (useTransaction) {
+      try {
+        session = await mongoose.startSession();
+      } catch (sessErr: any) {
+        console.warn(`[Publish] Unable to start MongoDB session (${sessErr?.message || sessErr}). Falling back to non-transactional writes.`);
+        session = null;
+        useTransaction = false;
+      }
     }
-
-    let newPublish: any;
-    let historyRecord: any;
 
     const executePublishWrites = async (activeSession: mongoose.ClientSession | null) => {
       const sessionOptions = activeSession ? { session: activeSession } : undefined;
 
-      // 1. Create Published Test Record with targets array
-      newPublish = new PublishedTestModel({
+      // 1. Create Published Test Record with targets array (fresh instance per attempt)
+      const pubDoc = new PublishedTestModel({
         _id: newPublishId,
         idempotencyKey,
         requestFingerprint,
@@ -4022,19 +4034,37 @@ router.post('/publish', authenticate, requireRole('super_admin'), async (req: Re
         isPaused: false,
         publishedAt: new Date(),
       });
-      await newPublish.save(sessionOptions);
+      await pubDoc.save(sessionOptions);
+
+      // Controlled failure injection for testing (active strictly in test environment)
+      if (process.env.NODE_ENV === 'test' || process.env.APP_ENV === 'test') {
+        const failAt = req.get('X-Test-Fail-At');
+        if (failAt === 'assignments' || failAt === 'abort' || failAt === 'cleanup_assignments') {
+          throw new Error(`[Test Injection] Controlled failure during student assignment insertion (mode: ${failAt})`);
+        }
+      }
 
       // 2. Insert student assignments into MongoDB
       if (newAssignments.length > 0) {
+        // Deep-clone plain objects so retry attempts do not have mutated _id fields
+        const assignmentsToInsert = newAssignments.map((a) => ({ ...a }));
         if (activeSession) {
-          await StudentTestAssignmentModel.insertMany(newAssignments, { session: activeSession });
+          await StudentTestAssignmentModel.insertMany(assignmentsToInsert, { session: activeSession, ordered: true });
         } else {
-          await StudentTestAssignmentModel.insertMany(newAssignments);
+          await StudentTestAssignmentModel.insertMany(assignmentsToInsert, { ordered: true });
+        }
+      }
+
+      // Controlled failure injection for history (active strictly in test environment)
+      if (process.env.NODE_ENV === 'test' || process.env.APP_ENV === 'test') {
+        const failAt = req.get('X-Test-Fail-At');
+        if (failAt === 'history') {
+          throw new Error('[Test Injection] Controlled failure during PublishHistory creation');
         }
       }
 
       // 3. Create permanent history record in MongoDB
-      historyRecord = new PublishHistoryModel({
+      const histDoc = new PublishHistoryModel({
         publishId: publishedTestId,
         publishName: publishName.trim(),
         date: startDate,
@@ -4073,78 +4103,205 @@ router.post('/publish', authenticate, requireRole('super_admin'), async (req: Re
           status: 'NOT_STARTED',
         })),
       });
-      await historyRecord.save(sessionOptions);
+      await histDoc.save(sessionOptions);
 
-      // 4. Mark publication completion state
-      newPublish.publishState = 'COMPLETE';
-      await newPublish.save(sessionOptions);
+      // 4. Mark publication completion state atomically before commit
+      pubDoc.publishState = 'COMPLETE';
+      await pubDoc.save(sessionOptions);
+
+      return { pubDoc, histDoc };
     };
+
+    let newPublish: any = null;
+    let historyRecord: any = null;
+    const MAX_TX_RETRIES = 3;
+    let attempt = 0;
+    let txSuccess = false;
 
     try {
       if (useTransaction && session) {
-        try {
-          await executePublishWrites(session);
-          await session.commitTransaction();
-        } catch (txErr: any) {
-          await session.abortTransaction().catch(() => undefined);
+        while (attempt < MAX_TX_RETRIES && !txSuccess) {
+          attempt++;
+          try {
+            session.startTransaction({
+              readConcern: { level: 'local' },
+              writeConcern: { w: 'majority' },
+            });
 
-          // Check if error is due to MongoDB topology not supporting transactions (standalone mongod without replica set)
-          const isTxUnsupported =
-            txErr?.code === 20 ||
-            txErr?.codeName === 'IllegalOperation' ||
-            (typeof txErr?.message === 'string' &&
-              txErr.message.includes('Transaction numbers are only allowed on a replica set member or mongos'));
+            const result = await executePublishWrites(session);
+            await session.commitTransaction();
 
-          if (isTxUnsupported) {
-            console.warn('[Publish] Multi-document transactions unsupported by current MongoDB topology (standalone mode). Falling back to resilient non-transactional writes with compensatory cleanup.');
-            useTransaction = false;
+            newPublish = result.pubDoc;
+            historyRecord = result.histDoc;
+            txSuccess = true;
+          } catch (txErr: any) {
+            // Abort the transaction cleanly
             try {
-              await executePublishWrites(null);
-            } catch (fallbackErr: any) {
-              await StudentTestAssignmentModel.deleteMany({ publishedTestId }).catch(() => undefined);
-              await PublishHistoryModel.deleteOne({ publishId: publishedTestId }).catch(() => undefined);
-              await PublishedTestModel.deleteOne({ _id: newPublishId }).catch(() => undefined);
-              throw fallbackErr;
+              if (session.inTransaction()) {
+                // Test injection for abort failure if requested
+                if ((process.env.NODE_ENV === 'test' || process.env.APP_ENV === 'test') && req.get('X-Test-Fail-At') === 'abort') {
+                  throw new Error('[Test Injection] Controlled transaction abort failure');
+                }
+                await session.abortTransaction();
+                console.warn(`[Publish] Transaction aborted cleanly for publishedTestId: ${publishedTestId} (Attempt ${attempt}/${MAX_TX_RETRIES}). Reason: ${txErr?.message || txErr}`);
+              }
+            } catch (abortErr: any) {
+              console.error(`[Publish Transaction Abort Error] Failed to abort transaction for publishedTestId: ${publishedTestId}: ${abortErr?.message || abortErr}`);
             }
-          } else {
+
+            // Check if error is due to MongoDB topology not supporting transactions (standalone mongod without replica set)
+            const isTxUnsupported =
+              txErr?.code === 20 ||
+              txErr?.codeName === 'IllegalOperation' ||
+              (typeof txErr?.message === 'string' &&
+                txErr.message.includes('Transaction numbers are only allowed on a replica set member or mongos'));
+
+            if (isTxUnsupported) {
+              console.warn('[Publish] Multi-document transactions unsupported by current MongoDB deployment topology. Falling back to non-transactional mode with compensatory cleanup.');
+              useTransaction = false;
+              break;
+            }
+
+            // Duplicate key conflict (code 11000): another request already committed or holds the key; do not retry blindly
+            if (txErr?.code === 11000) {
+              throw txErr;
+            }
+
+            // Check for transient transaction error that is safe to retry
+            const isTransient =
+              txErr?.hasErrorLabel?.('TransientTransactionError') ||
+              txErr?.hasErrorLabel?.('UnknownTransactionCommitResult') ||
+              txErr?.code === 112; // WriteConflict
+
+            if (isTransient && attempt < MAX_TX_RETRIES) {
+              console.warn(`[Publish] Transient error encountered (code: ${txErr.code || 'transient'}). Retrying attempt ${attempt + 1}/${MAX_TX_RETRIES} in ${attempt * 100}ms...`);
+              await new Promise((resolve) => setTimeout(resolve, attempt * 100));
+              continue;
+            }
+
+            // Non-transient error or retries exhausted
             throw txErr;
           }
         }
-      } else {
-        // Non-transactional fallback with compensatory rollback
+      }
+
+      // Non-transactional fallback (when transactions are unsupported or disabled)
+      if (!txSuccess) {
         try {
-          await executePublishWrites(null);
+          const result = await executePublishWrites(null);
+          newPublish = result.pubDoc;
+          historyRecord = result.histDoc;
         } catch (directErr: any) {
-          await StudentTestAssignmentModel.deleteMany({ publishedTestId }).catch(() => undefined);
-          await PublishHistoryModel.deleteOne({ publishId: publishedTestId }).catch(() => undefined);
-          await PublishedTestModel.deleteOne({ _id: newPublishId }).catch(() => undefined);
+          console.error(`[Publish Non-Tx Error] Publishing writes failed for publishedTestId: ${publishedTestId}: ${directErr?.message || directErr}`);
+
+          let assignmentsDeleted = false;
+          let historyDeleted = false;
+          let pubTestCleaned = false;
+
+          // 1. Compensatory cleanup: Delete partial assignments
+          try {
+            if ((process.env.NODE_ENV === 'test' || process.env.APP_ENV === 'test') && req.get('X-Test-Fail-At') === 'cleanup_assignments') {
+              throw new Error('[Test Injection] Controlled compensatory cleanup failure');
+            }
+            const delRes = await StudentTestAssignmentModel.deleteMany({ publishedTestId });
+            assignmentsDeleted = true;
+            console.log(`[Publish Cleanup] Cleaned up ${delRes.deletedCount || 0} student assignments for ${publishedTestId}`);
+          } catch (cleanAssignErr: any) {
+            console.error(`[Publish Cleanup Error] Failed to delete partial assignments for publishedTestId: ${publishedTestId}: ${cleanAssignErr?.message || cleanAssignErr}`);
+          }
+
+          // 2. Compensatory cleanup: Delete partial history
+          try {
+            await PublishHistoryModel.deleteOne({ publishId: publishedTestId });
+            historyDeleted = true;
+          } catch (cleanHistErr: any) {
+            console.error(`[Publish Cleanup Error] Failed to delete partial history for publishedTestId: ${publishedTestId}: ${cleanHistErr?.message || cleanHistErr}`);
+          }
+
+          // 3. Compensatory cleanup: Delete incomplete PublishedTest record only if safe
+          if (assignmentsDeleted && historyDeleted) {
+            try {
+              await PublishedTestModel.deleteOne({ _id: newPublishId, publishState: { $ne: 'COMPLETE' } });
+              pubTestCleaned = true;
+              console.log(`[Publish Cleanup] Removed incomplete PublishedTest record ${publishedTestId}`);
+            } catch (cleanPubErr: any) {
+              console.error(`[Publish Cleanup Error] Failed to remove incomplete PublishedTest record ${publishedTestId}: ${cleanPubErr?.message || cleanPubErr}`);
+            }
+          }
+
+          // If cleanup could not fully remove incomplete records, record FAILED state with failure details for recovery
+          if (!pubTestCleaned) {
+            try {
+              await PublishedTestModel.updateOne(
+                { _id: newPublishId, publishState: { $ne: 'COMPLETE' } },
+                {
+                  $set: {
+                    publishState: 'FAILED',
+                    failureReason: String(directErr?.message || 'Publishing failed before completion'),
+                    failedAt: new Date(),
+                  },
+                }
+              );
+              console.warn(`[Publish Recovery] Marked publishedTestId ${publishedTestId} as 'FAILED' with failureReason for future repair.`);
+            } catch (markFailedErr: any) {
+              console.error(`[Publish Recovery Error] Failed to mark PublishedTest as FAILED for ${publishedTestId}: ${markFailedErr?.message || markFailedErr}`);
+            }
+          }
+
           throw directErr;
         }
       }
     } catch (writeError: any) {
-      if (writeError?.code === 11000) {
-        const racedRequest = await PublishedTestModel.findOne({ idempotencyKey });
-        if (racedRequest?.requestFingerprint === requestFingerprint && racedRequest?.publishState === 'COMPLETE') {
-          const history = await PublishHistoryModel.findOne({ publishId: String(racedRequest._id) });
-          const assignmentCount = await StudentTestAssignmentModel.countDocuments({ publishedTestId: String(racedRequest._id) });
-          return res.status(200).json({
-            message: `Assessment '${racedRequest.publishName}' was already published for this request.`,
-            publishedTest: formatDoc(racedRequest),
-            assignedStudentCount: assignmentCount,
-            totalAssignedStudents: assignmentCount,
-            historyRecordId: history?._id?.toString(),
-            idempotentReplay: true,
-          });
+      const isDupKey = writeError?.code === 11000;
+      const isConflict = writeError?.code === 112 || writeError?.hasErrorLabel?.('TransientTransactionError');
+
+      if (isDupKey || isConflict) {
+        // Poll briefly in case a concurrent request is actively committing the transaction
+        let racedRequest = await PublishedTestModel.findOne({ idempotencyKey });
+        if (!racedRequest || racedRequest.publishState === 'PUBLISHING') {
+          for (let p = 0; p < 8; p++) {
+            await new Promise((r) => setTimeout(r, 50));
+            racedRequest = await PublishedTestModel.findOne({ idempotencyKey });
+            if (racedRequest && (racedRequest.publishState === 'COMPLETE' || racedRequest.publishState === 'FAILED')) {
+              break;
+            }
+          }
         }
+
         if (racedRequest) {
-          return res.status(409).json({ error: 'This publication request is already being processed.' });
+          if (racedRequest.requestFingerprint !== requestFingerprint) {
+            return res.status(409).json({ error: 'This Idempotency-Key was already used for a different publication request.' });
+          }
+          if (racedRequest.publishState === 'COMPLETE') {
+            const history = await PublishHistoryModel.findOne({ publishId: String(racedRequest._id) });
+            const assignmentCount = await StudentTestAssignmentModel.countDocuments({ publishedTestId: String(racedRequest._id) });
+            return res.status(200).json({
+              message: `Assessment '${racedRequest.publishName}' was already published for this request.`,
+              publishedTest: formatDoc(racedRequest),
+              assignedStudentCount: assignmentCount,
+              totalAssignedStudents: assignmentCount,
+              historyRecordId: history?._id?.toString(),
+              idempotentReplay: true,
+            });
+          }
+          if (racedRequest.publishState === 'PUBLISHING') {
+            return res.status(409).json({ error: 'This publication request is already being processed.' });
+          }
+          if (racedRequest.publishState === 'FAILED') {
+            return res.status(409).json({ error: 'A previous publication attempt with this key failed. Please retry to repair.' });
+          }
         }
       }
+
       console.error('[Publish Write Error]:', writeError?.message || writeError);
       return res.status(500).json({ error: 'Failed to publish assessment' });
     } finally {
       if (session) {
-        await session.endSession().catch(() => undefined);
+        try {
+          await session.endSession();
+        } catch (endErr: any) {
+          console.error(`[Publish Session Error] Failed to end session: ${endErr?.message || endErr}`);
+        }
       }
     }
 
@@ -4153,7 +4310,7 @@ router.post('/publish', authenticate, requireRole('super_admin'), async (req: Re
       publishedTest: formatDoc(newPublish),
       assignedStudentCount: candidateStudents.length,
       totalAssignedStudents: candidateStudents.length,
-      historyRecordId: historyRecord._id.toString(),
+      historyRecordId: historyRecord?._id?.toString(),
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to publish assessment' });

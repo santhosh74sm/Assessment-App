@@ -245,6 +245,8 @@ export interface IPublishedTestDocument extends Document {
   idempotencyKey?: string;
   requestFingerprint?: string;
   publishState?: 'PUBLISHING' | 'COMPLETE' | 'FAILED';
+  failureReason?: string;
+  failedAt?: Date;
   publishName: string;
   publishMode: 'Selected Questions' | 'Random Questions';
   target: {
@@ -285,6 +287,8 @@ export const PublishedTestSchema = new Schema<IPublishedTestDocument>(
     idempotencyKey: { type: String },
     requestFingerprint: { type: String },
     publishState: { type: String, enum: ['PUBLISHING', 'COMPLETE', 'FAILED'] },
+    failureReason: { type: String },
+    failedAt: { type: Date },
     publishMode: { type: String, required: true, enum: ['Selected Questions', 'Random Questions'] },
     status: { type: String, enum: ['ACTIVE', 'PAUSED'], default: 'ACTIVE', index: true },
     isPaused: { type: Boolean, default: false, index: true },
