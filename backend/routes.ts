@@ -4510,10 +4510,22 @@ router.post('/student/tests/:assignmentId/start', authenticate, async (req: Requ
 
     // Finding 15 Fix: If test is already IN_PROGRESS, allow resuming the same attempt without restarting
     if (assignment.status === 'IN_PROGRESS') {
-      const allQuestionsDocs = await QuestionModel.find();
+      const targetQuestionIds = Array.from(
+        new Set(
+          (assignment.questions || [])
+            .map((q: any) => String(q.questionId || q.id || q._id || '').trim())
+            .filter(Boolean)
+        )
+      );
+      const validQuestionIds = targetQuestionIds.filter((id) => mongoose.isValidObjectId(id));
+      const relevantQuestionDocs = validQuestionIds.length > 0
+        ? await QuestionModel.find({ _id: { $in: validQuestionIds } }).lean()
+        : [];
       const qMap = new Map<string, any>();
-      for (const q of allQuestionsDocs) {
-        qMap.set(q._id.toString(), q);
+      for (const q of relevantQuestionDocs) {
+        const idStr = q._id ? q._id.toString() : '';
+        if (idStr) qMap.set(idStr, q);
+        if (q.id && String(q.id) !== idStr) qMap.set(String(q.id), q);
       }
       const sanitizedQuestions = (assignment.questions || []).map((q: any) => {
         const fullQ = qMap.get(String(q.questionId || q.id || q._id));
@@ -4567,8 +4579,21 @@ router.post('/student/tests/:assignmentId/start', authenticate, async (req: Requ
     // Defensive active question check:
     // Ensure that if any question was deleted from the active Question Bank while this assignment was NOT_STARTED,
     // that deleted question is excluded when starting.
-    const allQuestionsDocs = await QuestionModel.find();
-    const activeQuestionIdSet = new Set(allQuestionsDocs.map((q) => q._id.toString()));
+    // Efficiently query only the questions referenced in this assignment instead of scanning the entire collection.
+    const targetQuestionIds = Array.from(
+      new Set(
+        (assignment.questions || [])
+          .map((q: any) => String(q.questionId || q.id || q._id || '').trim())
+          .filter(Boolean)
+      )
+    );
+    const validQuestionIds = targetQuestionIds.filter((id) => mongoose.isValidObjectId(id));
+    const relevantQuestionDocs = validQuestionIds.length > 0
+      ? await QuestionModel.find({ _id: { $in: validQuestionIds } }).lean()
+      : [];
+    const activeQuestionIdSet = new Set(
+      relevantQuestionDocs.map((q: any) => (q._id ? q._id.toString() : String(q.id || '')))
+    );
 
     const activeQuestions = (assignment.questions || []).filter((q: any) => {
       const qId = String(q.questionId || q.id || q._id || '');
@@ -4598,8 +4623,10 @@ router.post('/student/tests/:assignmentId/start', authenticate, async (req: Requ
     );
 
     const qMap = new Map<string, any>();
-    for (const q of allQuestionsDocs) {
-      qMap.set(q._id.toString(), q);
+    for (const q of relevantQuestionDocs) {
+      const idStr = q._id ? q._id.toString() : '';
+      if (idStr) qMap.set(idStr, q);
+      if (q.id && String(q.id) !== idStr) qMap.set(String(q.id), q);
     }
 
     const sanitizedQuestions = assignment.questions.map((q: any) => {
