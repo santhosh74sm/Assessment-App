@@ -16,8 +16,9 @@ export function createRateLimiter(options: RateLimitOptions) {
     message = 'Too many requests, please try again later.',
     prefix = 'general',
     keyGenerator = (req: Request) => {
-      const forwarded = req.headers['x-forwarded-for'];
-      const ip = (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '') || req.ip || req.socket.remoteAddress || 'unknown';
+      // SEC-03: Use Express's trusted req.ip (evaluated according to app 'trust proxy' setting)
+      // rather than blindly trusting the raw X-Forwarded-For header which can be spoofed by clients.
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
       return ip;
     },
   } = options;

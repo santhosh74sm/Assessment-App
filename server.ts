@@ -17,6 +17,31 @@ import { getJwtSecret, parseCookies } from './backend/middleware/auth.ts';
 
 async function startServer() {
   const app = express();
+
+  // SEC-03: Configure Express 'trust proxy' to prevent X-Forwarded-For IP spoofing
+  // - In production (e.g. Google Cloud Run or reverse proxy), trust 1 proxy hop by default
+  //   so req.ip is extracted from the trusted proxy header rather than client-controlled input.
+  // - Allow explicit override via TRUST_PROXY (e.g. '1', '2', 'loopback', 'true', 'false').
+  // - In development/test, default to 'loopback' to allow local testing while preventing spoofing.
+  const rawTrustProxy = process.env.TRUST_PROXY?.trim();
+  let trustProxySetting: boolean | number | string | string[];
+  if (rawTrustProxy !== undefined && rawTrustProxy !== '') {
+    if (rawTrustProxy === 'true') {
+      trustProxySetting = true;
+    } else if (rawTrustProxy === 'false') {
+      trustProxySetting = false;
+    } else if (!isNaN(Number(rawTrustProxy))) {
+      trustProxySetting = parseInt(rawTrustProxy, 10);
+    } else if (rawTrustProxy.includes(',')) {
+      trustProxySetting = rawTrustProxy.split(',').map((s) => s.trim());
+    } else {
+      trustProxySetting = rawTrustProxy;
+    }
+  } else {
+    trustProxySetting = process.env.NODE_ENV === 'production' ? 1 : 'loopback';
+  }
+  app.set('trust proxy', trustProxySetting);
+
   // Parse command line arguments (--port, --host)
   let cliPort: number | undefined;
   let cliHost: string | undefined;
@@ -55,12 +80,8 @@ async function startServer() {
   const fallbackPort = 3000;
   const HOST = cliHost || process.env.HOST || '0.0.0.0';
 
-  // JWT_SECRET security enforcement: Ephemeral fallback in development, validated in production
-  try {
-    getJwtSecret();
-  } catch (err: any) {
-    console.warn('[System] Warning initializing JWT secret:', err.message);
-  }
+  // SEC-05: JWT_SECRET validation at startup. In production, fails immediately if missing or < 32 chars.
+  getJwtSecret();
 
   // SEC-MED-05 & SEC-05: HTTP Security Headers Middleware & Hardened CSP
   app.use((req, res, next) => {
@@ -260,6 +281,7 @@ async function startServer() {
 }
 
 startServer().catch((err) => {
-  console.error('Failed to start server:', err);
+  console.error('[System] Failed to start server:', err?.message || err);
+  process.exit(1);
 });
 

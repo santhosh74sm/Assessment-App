@@ -192,8 +192,9 @@ export async function ensureInitialSuperAdmin() {
     if (!existingSuperAdmin) {
       const username = 'san';
       const password = 'san';
-      const salt = bcrypt.genSaltSync(10);
-      const passwordHash = bcrypt.hashSync(password, salt);
+      // SEC-04: Asynchronous non-blocking password hashing
+      const salt = await bcrypt.genSalt(10);
+      const passwordHash = await bcrypt.hash(password, salt);
 
       await UserModel.create({
         username,

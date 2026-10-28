@@ -195,9 +195,8 @@ const answerRateLimiter = createRateLimiter({
     if (typeof validStudentId === 'string' && validStudentId.trim()) {
       return `stu:${validStudentId.trim()}`;
     }
-    // Fallback to validated client IP for unauthenticated traffic
-    const forwarded = req.headers['x-forwarded-for'];
-    const ip = (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '') || req.ip || req.socket.remoteAddress || 'unknown';
+    // SEC-03: Fallback to validated client IP (evaluated securely via app 'trust proxy' setting)
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
     return `ip:${ip}`;
   },
 });
@@ -332,11 +331,13 @@ router.post('/auth/setup-first-admin', async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Setup is already completed. Please sign in.' });
     }
 
-    const salt = bcrypt.genSaltSync(10);
+    // SEC-04: Asynchronous non-blocking password hashing
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
     const firstSuperAdmin = await UserModel.create({
       username: username.trim(),
       role: 'super_admin',
-      passwordHash: bcrypt.hashSync(password, salt),
+      passwordHash,
       mustChangePassword: false,
     });
 
@@ -344,6 +345,7 @@ router.post('/auth/setup-first-admin', async (req: Request, res: Response) => {
       userId: firstSuperAdmin._id.toString(),
       username: firstSuperAdmin.username,
       role: firstSuperAdmin.role,
+      tokenVersion: firstSuperAdmin.tokenVersion ?? 0,
     };
 
     const { token: accessToken } = generateAccessToken(userPayload);
@@ -403,16 +405,24 @@ router.post('/auth/login', loginRateLimiter, async (req: Request, res: Response)
       ],
     });
 
-    if (!user) {
+    if (!user || !user.passwordHash || typeof user.passwordHash !== 'string') {
       return res.status(401).json({ error: 'Username or password is incorrect.' });
     }
 
-    const isMatch =
-      bcrypt.compareSync(password, user.passwordHash) ||
-      (typeof password === 'string' &&
-        (bcrypt.compareSync(password.trim(), user.passwordHash) ||
-          bcrypt.compareSync(password.trimEnd(), user.passwordHash) ||
-          bcrypt.compareSync(password.trimStart(), user.passwordHash)));
+    // SEC-04: Asynchronous non-blocking password comparison.
+    // Compares password against stored hash without blocking the Node.js event loop.
+    // If the input contains whitespace, safely falls back to trimmed comparison
+    // to preserve existing login compatibility without running redundant sync checks.
+    let isMatch = false;
+    try {
+      isMatch = await bcrypt.compare(password, user.passwordHash);
+      if (!isMatch && password.trim() !== password) {
+        isMatch = await bcrypt.compare(password.trim(), user.passwordHash);
+      }
+    } catch (bcryptErr: any) {
+      console.warn('[Auth] Error during password comparison, rejecting safely:', bcryptErr?.message || 'Comparison error');
+      isMatch = false;
+    }
 
     if (!isMatch) {
       return res.status(401).json({ error: 'Username or password is incorrect.' });
@@ -425,6 +435,7 @@ router.post('/auth/login', loginRateLimiter, async (req: Request, res: Response)
       schoolId: user.schoolId,
       schoolName: user.schoolName,
       studentId: user.uniqueStudentId,
+      tokenVersion: user.tokenVersion ?? 0,
     };
 
     const { token: accessToken } = generateAccessToken(userPayload);
@@ -525,9 +536,18 @@ router.post('/auth/refresh', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'User account not found.' });
     }
 
+    // AUD-HIGH-02: Invalidate refresh if user's tokenVersion changed (password change/reset)
+    const tokenVersion = decoded.tokenVersion ?? 0;
+    const currentVersion = user.tokenVersion ?? 0;
+    if (tokenVersion !== currentVersion) {
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'Session invalidated due to password change or reset. Please sign in again.' });
+    }
+
     // Rotate tokens:
-    // 1. Invalidate old refresh token jti
-    await sharedStore.revokeToken(decoded.jti);
+    // 1. Invalidate old refresh token jti with full token expiration timestamp (SEC-02)
+    const refreshExpiryMs = decoded.exp ? decoded.exp * 1000 : undefined;
+    await sharedStore.revokeToken(decoded.jti, refreshExpiryMs);
 
     // 2. Generate fresh tokens
     const userPayload = {
@@ -537,6 +557,7 @@ router.post('/auth/refresh', async (req: Request, res: Response) => {
       schoolId: user.schoolId,
       schoolName: user.schoolName,
       studentId: user.uniqueStudentId,
+      tokenVersion: currentVersion,
     };
 
     const { token: newAccessToken } = generateAccessToken(userPayload);
@@ -580,8 +601,9 @@ router.post('/auth/logout', authenticate, async (req: Request, res: Response) =>
     if (refreshToken) {
       try {
         const decoded = jwt.decode(refreshToken) as any;
+        const refreshExpiryMs = decoded?.exp ? decoded.exp * 1000 : undefined;
         if (decoded?.jti) {
-          revokeToken(decoded.jti);
+          revokeToken(decoded.jti, refreshExpiryMs);
         }
       } catch (_) {}
     }
@@ -672,14 +694,38 @@ router.post('/auth/change-password', authenticate, async (req: Request, res: Res
       return res.status(400).json({ error: 'Please choose a password different from your username or ID' });
     }
 
-    const salt = bcrypt.genSaltSync(10);
-    user.passwordHash = bcrypt.hashSync(newPassword, salt);
+    // SEC-04: Asynchronous non-blocking password hashing
+    const salt = await bcrypt.genSalt(10);
+    user.passwordHash = await bcrypt.hash(newPassword, salt);
     user.mustChangePassword = false;
     user.passwordResetRequested = false;
     user.passwordResetRequestedAt = undefined;
+    // AUD-HIGH-02: Increment token version to invalidate existing sessions across all clients
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
     await user.save();
 
-    return res.json({ success: true, message: 'Password updated successfully' });
+    const userPayload = {
+      userId: user._id.toString(),
+      username: user.username,
+      role: user.role,
+      schoolId: user.schoolId,
+      schoolName: user.schoolName,
+      studentId: user.uniqueStudentId,
+      tokenVersion: user.tokenVersion,
+    };
+
+    const { token: newAccessToken } = generateAccessToken(userPayload);
+    const { token: newRefreshToken } = generateRefreshToken(userPayload);
+    const csrfToken = generateCsrfToken();
+
+    setAuthCookies(res, newAccessToken, newRefreshToken, csrfToken, shouldEnforceSecureCookie(req));
+
+    return res.json({
+      success: true,
+      message: 'Password updated successfully',
+      token: newAccessToken,
+      csrfToken,
+    });
   } catch (err: any) {
     return res.status(500).json({ error: 'Unable to update password. Please try again.' });
   }
@@ -818,11 +864,14 @@ router.post('/super-admin/reset-password', authenticate, requireRole('super_admi
     // SEC-MED-03: Generate cryptographically secure temporary password
     const tempPass = generateSecureTemporaryPassword(8);
 
-    const salt = bcrypt.genSaltSync(10);
-    user.passwordHash = bcrypt.hashSync(tempPass, salt);
+    // SEC-04: Asynchronous non-blocking password hashing
+    const salt = await bcrypt.genSalt(10);
+    user.passwordHash = await bcrypt.hash(tempPass, salt);
     user.mustChangePassword = true;
     // Per requirement 7: The reset request must remain active until user creates new password
     user.passwordResetRequested = true;
+    // AUD-HIGH-02: Increment token version to invalidate all active sessions for this user
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
     await user.save();
 
     console.log(`[SuperAdmin] Generated temporary password for user "${user.username}" (role: ${user.role})`);
@@ -861,8 +910,9 @@ router.post('/schools/:schoolId/admins', authenticate, requireRole('super_admin'
       if (!exists) isUnique = true;
     }
 
-    const salt = bcrypt.genSaltSync(10);
-    const passwordHash = bcrypt.hashSync(adminId, salt);
+    // SEC-04: Asynchronous non-blocking password hashing
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(adminId, salt);
 
     const newAdmin = await UserModel.create({
       username: adminId,
@@ -1061,11 +1111,13 @@ router.post('/students', authenticate, async (req: Request, res: Response) => {
 
     // SEC-HIGH-01 & SEC-MED-03: Generate cryptographically secure initial temporary password
     const initialPassword = generateSecureTemporaryPassword(8);
-    const salt = bcrypt.genSaltSync(10);
+    // SEC-04: Asynchronous non-blocking password hashing
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(initialPassword, salt);
     const newStudent = await UserModel.create({
       username: uniqueStudentId,
       role: 'student',
-      passwordHash: bcrypt.hashSync(initialPassword, salt),
+      passwordHash,
       mustChangePassword: true,
       schoolId: school._id.toString(),
       schoolName: school.name,
@@ -1423,44 +1475,9 @@ router.post('/question-groups', authenticate, requireRole('super_admin'), async 
 });
 
 // List Question Groups (With Question Counts & Difficulty Breakdown)
-// SEC-CRIT-01: Sanitize correct answers for student callers to prevent answer key disclosure
-router.get('/question-groups', authenticate, async (req: Request, res: Response) => {
+// AUD-HIGH-01: Restricted to Super Admin to prevent Question Bank and answer key disclosure
+router.get('/question-groups', authenticate, requireRole('super_admin'), async (req: Request, res: Response) => {
   try {
-    if (req.user!.role === 'student') {
-      const assignments = await getStudentAccessibleAssignments(req);
-      const assignedQuestions = assignments.flatMap((a) => a.questions || []);
-      const groups = await QuestionGroupModel.find().sort({ createdAt: 1 });
-      const assignedGroupKeys = new Set(assignedQuestions.flatMap((q) => [
-        String(q.groupId || '').trim(),
-        String(q.groupName || '').trim().toLowerCase(),
-      ]).filter(Boolean));
-      const visibleGroups = groups.filter((g) =>
-        assignedGroupKeys.has(String(g._id)) || assignedGroupKeys.has(String(g.name || '').trim().toLowerCase())
-      );
-      return res.json(visibleGroups.map((g) => {
-        const groupQuestions = assignedQuestions.filter((q) =>
-          String(q.groupId || '').trim() === String(g._id) ||
-          String(q.groupName || '').trim().toLowerCase() === String(g.name || '').trim().toLowerCase()
-        );
-        const byDifficulty = (difficulty: string) => groupQuestions
-          .filter((q) => String(q.difficulty || '').trim().toLowerCase() === difficulty.toLowerCase())
-          .map((q) => serializeStudentQuestion(q));
-        const easy = byDifficulty('Easy');
-        const medium = byDifficulty('Medium');
-        const hard = byDifficulty('Hard');
-        return {
-          id: String(g._id), _id: String(g._id), name: g.name, description: g.description,
-          createdAt: g.createdAt, questionCount: groupQuestions.length,
-          easyCount: easy.length, mediumCount: medium.length, hardCount: hard.length,
-          breakdown: {
-            Easy: { count: easy.length, questions: easy },
-            Medium: { count: medium.length, questions: medium },
-            Hard: { count: hard.length, questions: hard },
-          },
-        };
-      }));
-    }
-
     const groups = await QuestionGroupModel.find().sort({ createdAt: 1 });
     const questions = await QuestionModel.find();
     const formatQuestionsList = (qList: unknown[]) => {
@@ -2451,23 +2468,13 @@ router.put('/questions/:id', authenticate, requireRole('super_admin'), async (re
   }
 });
 
-// List Questions (Filtered by groupId, difficulty)
-router.get('/questions', authenticate, async (req: Request, res: Response) => {
+// SEC-06: List Questions (Filtered by groupId, difficulty) - Super Admin Only
+router.get('/questions', authenticate, requireRole('super_admin'), async (req: Request, res: Response) => {
   try {
     const { groupId, difficulty } = req.query as {
       groupId?: string;
       difficulty?: string;
     };
-
-    if (req.user!.role === 'student') {
-      const assignments = await getStudentAccessibleAssignments(req);
-      const questions = assignments.flatMap((a: any) => a.questions || []).filter((q: any) => {
-        if (groupId && String(q.groupId || '') !== groupId) return false;
-        if (difficulty && String(q.difficulty || '').toLowerCase() !== difficulty.toLowerCase()) return false;
-        return true;
-      });
-      return res.json(questions.map((q: any) => serializeStudentQuestion(q)));
-    }
 
     const query: any = {};
     if (groupId) query.groupId = groupId;
@@ -5423,7 +5430,8 @@ router.post('/student/logout', authenticate, async (req: Request, res: Response)
     if (refreshToken) {
       try {
         const decoded = jwt.decode(refreshToken) as any;
-        if (decoded?.jti) revokeToken(decoded.jti);
+        const refreshExpiryMs = decoded?.exp ? decoded.exp * 1000 : undefined;
+        if (decoded?.jti) revokeToken(decoded.jti, refreshExpiryMs);
       } catch (_) {}
     }
     clearAuthCookies(res);

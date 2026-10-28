@@ -20,6 +20,7 @@ export interface IUserDocument extends Document {
   section?: string;
   schoolAdmissionNumber?: string;
   uniqueStudentId?: string;
+  tokenVersion?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -39,6 +40,7 @@ export const UserSchema = new Schema<IUserDocument>(
     section: { type: String, index: true },
     schoolAdmissionNumber: { type: String, trim: true },
     uniqueStudentId: { type: String, index: true },
+    tokenVersion: { type: Number, default: 0 },
   },
   {
     timestamps: true,

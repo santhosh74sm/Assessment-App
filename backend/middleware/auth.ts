@@ -1,30 +1,35 @@
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import type { UserRole } from '../types.ts';
 import { sharedStore } from '../services/sharedStore.ts';
+import { UserModel } from '../../database/models.ts';
 
 let devEphemeralSecret: string | null = null;
 
 export function getJwtSecret(): string {
   const secret = process.env.JWT_SECRET?.trim();
+  const isProduction = process.env.NODE_ENV === 'production';
+
   if (secret && secret.length >= 32) {
     return secret;
   }
 
-  // Fallback: Ephemeral random secret (NEVER hardcoded, cannot be predicted by external attackers)
+  // SEC-05: In production, require JWT_SECRET to be configured and at least 32 characters long.
+  // Ephemeral fallback is strictly forbidden in production to prevent session invalidation and token forgery across multi-instance deployments.
+  if (isProduction) {
+    throw new Error(
+      '[Fatal Security Error] JWT_SECRET is not configured or is shorter than 32 characters in production. Configure a strong JWT_SECRET (>= 32 chars) in environment variables.'
+    );
+  }
+
+  // Fallback: Ephemeral random secret for non-production development/test ONLY (never in production)
   if (!devEphemeralSecret) {
     devEphemeralSecret = crypto.randomBytes(32).toString('hex');
-    const isProduction = process.env.NODE_ENV === 'production';
-    if (isProduction) {
-      console.warn(
-        '[Security Warning] JWT_SECRET is not configured or is shorter than 32 characters in production. An ephemeral random secret has been generated for this instance. Configure a strong JWT_SECRET (>= 32 chars) in environment variables for persistent sessions.'
-      );
-    } else {
-      console.warn(
-        '[Security Notice] JWT_SECRET is not configured or shorter than 32 characters in development. An ephemeral random secret has been generated for this session.'
-      );
-    }
+    console.warn(
+      '[Security Notice] JWT_SECRET is not configured or shorter than 32 characters in development/test. An ephemeral random secret has been generated for this local session.'
+    );
   }
   return devEphemeralSecret;
 }
@@ -58,9 +63,9 @@ export function parseCookies(header?: string): Record<string, string> {
   return cookies;
 }
 
-// SEC-MED-04 & SCAL-LOW-01: Shared store token revocation registry (Redis + Memory fallback)
-export function revokeToken(token: string): void {
-  sharedStore.revokeToken(token).catch((err) => {
+// SEC-MED-04, SCAL-LOW-01 & SEC-02: Shared store token revocation registry (Redis + Memory fallback)
+export function revokeToken(token: string, expiryMs?: number): Promise<void> {
+  return sharedStore.revokeToken(token, expiryMs).catch((err) => {
     console.warn('[Auth] Token revocation error:', err.message);
   });
 }
@@ -77,6 +82,7 @@ export interface AuthUserPayload {
   schoolName?: string;
   studentId?: string;
   studentName?: string;
+  tokenVersion?: number;
   jti?: string;
   type?: 'access' | 'refresh';
 }
@@ -100,6 +106,7 @@ export function generateAccessToken(payload: AuthUserPayload): { token: string; 
   const token = jwt.sign(
     {
       ...payload,
+      tokenVersion: payload.tokenVersion ?? 0,
       jti,
       type: 'access',
     },
@@ -122,6 +129,7 @@ export function generateRefreshToken(payload: AuthUserPayload): { token: string;
       schoolName: payload.schoolName,
       studentId: payload.studentId,
       studentName: payload.studentName,
+      tokenVersion: payload.tokenVersion ?? 0,
       jti,
       type: 'refresh',
     },
@@ -243,6 +251,28 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
         return;
       }
     }
+
+    // AUD-HIGH-02: Validate token version against the current database user
+    if (decoded.userId && mongoose.connection.readyState === 1) {
+      try {
+        const user = await UserModel.findById(decoded.userId).select('tokenVersion').lean();
+        if (!user) {
+          clearAuthCookies(res);
+          res.status(401).json({ error: 'User account not found or has been deactivated.' });
+          return;
+        }
+        const currentVersion = (user as any).tokenVersion ?? 0;
+        const tokenVersion = decoded.tokenVersion ?? 0;
+        if (tokenVersion !== currentVersion) {
+          clearAuthCookies(res);
+          res.status(401).json({ error: 'Session has been invalidated due to a password change or reset. Please sign in again.' });
+          return;
+        }
+      } catch (dbErr: any) {
+        console.warn('[Auth] Token version validation notice:', dbErr?.message || dbErr);
+      }
+    }
+
     req.user = decoded;
     req.token = token;
     req.authMode = authMode;

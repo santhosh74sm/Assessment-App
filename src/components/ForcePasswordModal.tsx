@@ -5,7 +5,7 @@ import { getAuthHeaders } from '../utils/csrf.ts';
 interface ForcePasswordModalProps {
   username: string;
   token?: string | null;
-  onSuccess: () => void;
+  onSuccess: (newToken?: string, newCsrfToken?: string) => void;
 }
 
 export function ForcePasswordModal({ username, token, onSuccess }: ForcePasswordModalProps) {
@@ -51,7 +51,7 @@ export function ForcePasswordModal({ username, token, onSuccess }: ForcePassword
         throw new Error(data.error || 'Unable to update password. Please try again.');
       }
 
-      onSuccess();
+      onSuccess(data.token, data.csrfToken);
     } catch (err: any) {
       setError(err.message || 'Something went wrong. Please try again.');
     } finally {

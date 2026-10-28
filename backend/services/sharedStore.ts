@@ -218,6 +218,9 @@ class SharedStore {
           if (data.key && data.expiryMs) {
             this.memoryRevokedTokens.set(data.key, data.expiryMs);
           }
+          if (data.jti && data.expiryMs) {
+            this.memoryRevokedTokens.set(data.jti, data.expiryMs);
+          }
         } catch (_) {}
       });
     } catch (_) {
@@ -272,8 +275,8 @@ class SharedStore {
         const isRevokedInRedis = results.some((val) => val !== null);
 
         if (isRevokedInRedis) {
-          // Cache in local memory for fast future checks
-          const defaultExpiry = Date.now() + 2 * 60 * 60 * 1000;
+          // Cache in local memory for fast future checks (7-day window matching refresh token max lifetime)
+          const defaultExpiry = Date.now() + 7 * 24 * 60 * 60 * 1000;
           this.memoryRevokedTokens.set(tokenOrJti, defaultExpiry);
           if (jti) this.memoryRevokedTokens.set(jti, defaultExpiry);
           return true;
@@ -287,22 +290,38 @@ class SharedStore {
   }
 
   /**
-   * Revokes a token across local memory and distributed Redis store.
+   * Revokes a token or JTI across local memory and distributed Redis store.
+   * SEC-02: Preserves revocation for the token's remaining lifetime or the explicitExpiryMs provided.
+   * If explicitExpiryMs is not provided and the string cannot be decoded as a JWT,
+   * defaults to 7 days (matching the refresh token lifetime) rather than a premature 2-hour window.
    */
-  public async revokeToken(token: string): Promise<void> {
-    let expiryMs = Date.now() + 2 * 60 * 60 * 1000;
+  public async revokeToken(tokenOrJti: string, explicitExpiryMs?: number): Promise<void> {
+    if (!tokenOrJti || typeof tokenOrJti !== 'string') return;
+
+    // Default to full 7-day refresh token window (604,800,000 ms) so revoked JTIs never expire prematurely
+    const DEFAULT_REVOCATION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+    let expiryMs = explicitExpiryMs && explicitExpiryMs > Date.now()
+      ? explicitExpiryMs
+      : Date.now() + DEFAULT_REVOCATION_WINDOW_MS;
     let jti: string | undefined;
 
-    try {
-      const decoded = jwt.decode(token) as any;
-      if (decoded?.exp) {
-        expiryMs = decoded.exp * 1000;
-      }
-      jti = decoded?.jti;
-    } catch (_) {}
+    if (!explicitExpiryMs) {
+      try {
+        const decoded = jwt.decode(tokenOrJti) as any;
+        if (decoded?.exp && typeof decoded.exp === 'number') {
+          const jwtExpMs = decoded.exp * 1000;
+          if (jwtExpMs > Date.now()) {
+            expiryMs = jwtExpMs;
+          }
+        }
+        if (decoded?.jti && typeof decoded.jti === 'string') {
+          jti = decoded.jti;
+        }
+      } catch (_) {}
+    }
 
     // 1. Update local memory
-    this.memoryRevokedTokens.set(token, expiryMs);
+    this.memoryRevokedTokens.set(tokenOrJti, expiryMs);
     if (jti) {
       this.memoryRevokedTokens.set(jti, expiryMs);
     }
@@ -312,13 +331,13 @@ class SharedStore {
       const ttlSeconds = Math.max(60, Math.ceil((expiryMs - Date.now()) / 1000));
       try {
         const pipeline = this.redisClient.pipeline();
-        pipeline.set(`revoked_token:${token}`, '1', 'EX', ttlSeconds);
+        pipeline.set(`revoked_token:${tokenOrJti}`, '1', 'EX', ttlSeconds);
         if (jti) {
           pipeline.set(`revoked_token:${jti}`, '1', 'EX', ttlSeconds);
         }
         pipeline.publish(
           'puzzles:token_revocations',
-          JSON.stringify({ key: token, jti, expiryMs })
+          JSON.stringify({ key: tokenOrJti, jti, expiryMs })
         );
         await pipeline.exec();
       } catch (_) {

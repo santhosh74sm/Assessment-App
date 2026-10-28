@@ -390,7 +390,9 @@ function AppContent() {
     setLoginFormKey((k) => k + 1);
   };
 
-  const handlePasswordChangeComplete = () => {
+  const handlePasswordChangeComplete = (newToken?: string, newCsrfToken?: string) => {
+    if (newToken) setToken(newToken);
+    if (newCsrfToken) setCsrfToken(newCsrfToken);
     if (currentUser) {
       const updated = { ...currentUser, mustChangePassword: false };
       setCurrentUser(updated);
