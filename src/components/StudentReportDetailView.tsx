@@ -489,7 +489,12 @@ export function StudentReportDetailView({
                                   {q.writtenExplanation && (
                                     <div className="text-xs text-slate-700 dark:text-slate-300 pl-6 sm:pl-7 pt-0.5">
                                       <span className="text-slate-500 dark:text-slate-400 font-medium">Written Explanation: </span>
-                                      <span className="italic text-slate-800 dark:text-slate-200">"{q.writtenExplanation}"</span>
+                                      <span
+                                        className="italic text-slate-800 dark:text-slate-200 whitespace-pre-wrap break-words"
+                                        style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                                      >
+                                        "{q.writtenExplanation}"
+                                      </span>
                                     </div>
                                   )}
                                 </div>

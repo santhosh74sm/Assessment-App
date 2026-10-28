@@ -5519,7 +5519,7 @@ router.post('/student/tests/:assignmentId/answer', authenticate, answerRateLimit
       [`questions.${questionIndex}.earnedPoints`]: pointsEarned,
     };
     if (writtenExplanation !== undefined) {
-      updatePayload[`questions.${questionIndex}.writtenExplanation`] = String(writtenExplanation);
+      updatePayload[`questions.${questionIndex}.writtenExplanation`] = writtenExplanation != null ? String(writtenExplanation) : '';
     }
 
     await StudentTestAssignmentModel.findByIdAndUpdate(assignmentId, {
@@ -5596,7 +5596,7 @@ router.post('/student/tests/:assignmentId/submit', authenticate, async (req: Req
           const isCorrect = evaluateQuestionCorrectness(qItem, answerToUse);
           const hasPoints = qItem.points != null && !isNaN(Number(qItem.points)) && Number(qItem.points) > 0;
           const pointsEarned = (hasCorrectAnswer && isCorrect && hasPoints) ? Number(qItem.points) : 0;
-          const explanationToUse = ansItem.writtenExplanation !== undefined
+          const explanationToUse = (ansItem.writtenExplanation !== undefined && ansItem.writtenExplanation !== null)
             ? String(ansItem.writtenExplanation)
             : (qItem.writtenExplanation || '');
 
@@ -6572,6 +6572,8 @@ router.get('/reports/students/:studentId', authenticate, async (req: Request, re
               metadata: q.metadata || {},
               images: (Array.isArray(q.images) && q.images.length > 0) ? q.images : (q.questionId ? qMap.get(String(q.questionId))?.images : []) || [],
               imageLayout: q.imageLayout || (q.questionId ? qMap.get(String(q.questionId))?.imageLayout : 'auto') || 'auto',
+              writtenExplanation: q.writtenExplanation !== undefined && q.writtenExplanation !== null ? String(q.writtenExplanation) : '',
+              enableWrittenExplanation: q.enableWrittenExplanation !== undefined ? Boolean(q.enableWrittenExplanation) : Boolean(qMap.get(String(q.questionId))?.enableWrittenExplanation),
             };
             return req.user!.role === 'student'
               ? serializeStudentQuestion(reportQuestion)
@@ -6616,6 +6618,8 @@ router.get('/reports/students/:studentId', authenticate, async (req: Request, re
             timeTakenSeconds: q.timeTakenSeconds != null ? Number(q.timeTakenSeconds) : 0,
             scoringGuide: q.scoringGuide || fullQ?.scoringGuide || q.metadata?.scoringGuide || fullQ?.metadata?.scoringGuide,
             expectedResponse: q.expectedResponse || fullQ?.expectedResponse || q.metadata?.expectedResponse || fullQ?.metadata?.expectedResponse,
+            writtenExplanation: q.writtenExplanation !== undefined && q.writtenExplanation !== null ? String(q.writtenExplanation) : (fullQ?.writtenExplanation || ''),
+            enableWrittenExplanation: q.enableWrittenExplanation !== undefined ? Boolean(q.enableWrittenExplanation) : Boolean(fullQ?.enableWrittenExplanation),
           };
           return req.user!.role === 'student'
             ? serializeStudentQuestion(reportQuestion)
